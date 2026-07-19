@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#14213d" />
+    <title>千面·OneKOS｜内容增长操作系统</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%234d6bfe'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-family='Arial' font-size='34' font-weight='700' fill='white'%3EK%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="mobile-overlay" data-action="toggle-nav" aria-hidden="true"></div>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <div class="brand-mark">K</div>
+          <div>
+            <strong>千面·OneKOS</strong>
+            <span>内容增长操作系统</span>
+          </div>
+        </div>
+
+        <div class="demo-label"><span></span> 模拟演示数据</div>
+
+        <nav class="main-nav">
+          <p class="nav-caption">工作台</p>
+          <button class="nav-item active" type="button" data-page="dashboard">
+            <span class="nav-icon">⌂</span><span>运营驾驶舱</span>
+          </button>
+          <p class="nav-caption">内容增长链路</p>
+          <button class="nav-item" type="button" data-page="comments">
+            <span class="nav-icon">◉</span><span>抖音评论洞察</span><b>1</b>
+          </button>
+          <button class="nav-item" type="button" data-page="topics">
+            <span class="nav-icon">✦</span><span>智能选题</span><b>2</b>
+          </button>
+          <button class="nav-item" type="button" data-page="script">
+            <span class="nav-icon">▤</span><span>脚本工作台</span><b>3</b>
+          </button>
+          <button class="nav-item" type="button" data-page="quality">
+            <span class="nav-icon">✓</span><span>四重质检</span><b>4</b>
+          </button>
+          <button class="nav-item" type="button" data-page="publish">
+            <span class="nav-icon">↗</span><span>模拟发布</span><b>5</b>
+          </button>
+          <button class="nav-item" type="button" data-page="leads">
+            <span class="nav-icon">◎</span><span>评论转线索</span><b>6</b>
+          </button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+        <div class="advisor-mini">
+          <div class="avatar">林</div>
+          <div><strong>林一凡</strong><span>成都 · 新能源顾问</span></div>
+          <i>•••</i>
+        </div>
+        <button class="reset-button" type="button" data-action="reset-demo">↻ 重置演示</button>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <button class="mobile-menu" type="button" data-action="toggle-nav" aria-label="打开导航">☰</button>
+          <div>
+            <p id="breadcrumb">千面·OneKOS / 工作台</p>
+            <h1 id="page-title">运营驾驶舱</h1>
+          </div>
+          <div class="topbar-actions">
+            <div class="flow-status"><span id="flow-dot">0</span><div><small>演示进度</small><strong id="flow-label">准备开始</strong></div></div>
+            <span class="sim-badge">SIMULATION</span>
+          </div>
+        </header>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+        <div id="app-content" class="content" tabindex="-1"></div>
+      </main>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
