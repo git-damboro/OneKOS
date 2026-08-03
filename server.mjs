@@ -3,6 +3,8 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createApiHandler, createOneKosRuntime } from './src/api-router.mjs';
+
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_ROOT = path.join(ROOT, 'public');
 const SOURCE_ROOT = path.join(ROOT, 'src');
@@ -26,9 +28,14 @@ function resolveRequestPath(requestUrl) {
   }
   return { filePath: path.join(PUBLIC_ROOT, pathname.slice(1)) };
 }
-export function createAppServer() {
+export function createAppServer(options = {}) {
+  const runtime = options.service
+    ? { service: options.service, runtimeStatus: options.runtimeStatus || { mode: 'simulation', simulation: true, warnings: [] } }
+    : createOneKosRuntime({ env: options.env, fetchImpl: options.fetchImpl });
+  const handleApiRequest = createApiHandler(runtime);
   return http.createServer(async (request, response) => {
     try {
+      if (await handleApiRequest(request, response)) return;
       const resolved = resolveRequestPath(request.url ?? '/');
       if (resolved.forbidden) {
         response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -55,9 +62,13 @@ export function createAppServer() {
 
 const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
 if (entryPath === fileURLToPath(import.meta.url)) {
-  const server = createAppServer();
-  const port = Number(process.env.PORT) || 4173;
+  try { process.loadEnvFile(path.join(ROOT, '.env')); } catch {}
+  const runtime = createOneKosRuntime();
+  const server = createAppServer({ service: runtime.service, runtimeStatus: runtime.runtimeStatus });
+  const port = runtime.config.port;
   server.listen(port, '127.0.0.1', () => {
     console.log(`OneKOS MVP running at http://127.0.0.1:${port}`);
+    console.log(`Runtime mode: ${runtime.runtimeStatus.mode}`);
+    for (const warning of runtime.runtimeStatus.warnings) console.log(`Warning: ${warning}`);
   });
 }

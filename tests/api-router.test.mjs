@@ -1,0 +1,71 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { createAppServer } from '../server.mjs';
+
+async function withServer(service, run) {
+  const server = createAppServer({
+    service,
+    runtimeStatus: { mode: 'simulation', simulation: true, warnings: ['测试模式'], feishu: { configured: false }, llm: { configured: false } },
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await run(`http://127.0.0.1:${server.address().port}`);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+function jsonPost(url, body) {
+  return fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+test('健康检查与演示状态返回显式运行模式', async () => {
+  const service = { async getDemoState() { return { advisor: { advisorId: 'ADV-017' } }; } };
+  await withServer(service, async (baseUrl) => {
+    const health = await fetch(`${baseUrl}/api/health`).then((response) => response.json());
+    assert.equal(health.ok, true);
+    assert.equal(health.runtime.mode, 'simulation');
+
+    const state = await fetch(`${baseUrl}/api/demo/state`).then((response) => response.json());
+    assert.equal(state.data.advisor.advisorId, 'ADV-017');
+    assert.equal(state.runtime.simulation, true);
+  });
+});
+
+test('内容生成、评论分析与反馈确认路由到业务服务', async () => {
+  const calls = [];
+  const service = {
+    async generateContent(body) { calls.push(['content', body]); return { content: { contentId: body.contentId } }; },
+    async analyzeComment(body) { calls.push(['comment', body]); return { lead: { grade: 'A' } }; },
+    async confirmFeedback(eventId) { calls.push(['feedback', eventId]); return { applied: true }; },
+  };
+  await withServer(service, async (baseUrl) => {
+    const generated = await jsonPost(`${baseUrl}/api/content/generate`, { contentId: 'CONTENT-1' }).then((response) => response.json());
+    const analyzed = await jsonPost(`${baseUrl}/api/comments/analyze`, { commentId: 'COMMENT-1', text: '想试驾' }).then((response) => response.json());
+    const confirmed = await jsonPost(`${baseUrl}/api/feedback/EVENT-1/confirm`, {}).then((response) => response.json());
+    assert.equal(generated.data.content.contentId, 'CONTENT-1');
+    assert.equal(analyzed.data.lead.grade, 'A');
+    assert.equal(confirmed.data.applied, true);
+    assert.deepEqual(calls.map((item) => item[0]), ['content', 'comment', 'feedback']);
+  });
+});
+
+test('非法 JSON、未知 API 与业务错误返回统一结构', async () => {
+  const service = { async generateContent() { const error = new Error('任务不存在'); error.statusCode = 404; throw error; } };
+  await withServer(service, async (baseUrl) => {
+    const badJsonResponse = await fetch(`${baseUrl}/api/content/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' });
+    const badJson = await badJsonResponse.json();
+    assert.equal(badJsonResponse.status, 400);
+    assert.equal(badJson.ok, false);
+    assert.ok(badJson.error.requestId);
+
+    const businessResponse = await jsonPost(`${baseUrl}/api/content/generate`, {});
+    assert.equal(businessResponse.status, 404);
+    assert.match((await businessResponse.json()).error.message, /任务不存在/);
+
+    const unknownResponse = await fetch(`${baseUrl}/api/unknown`);
+    assert.equal(unknownResponse.status, 404);
+    assert.equal((await unknownResponse.json()).error.code, 'API_NOT_FOUND');
+  });
+});
