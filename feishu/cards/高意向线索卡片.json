@@ -1,0 +1,39 @@
+{
+  "schema": "2.0",
+  "config": { "update_multi": true },
+  "header": {
+    "title": { "tag": "plain_text", "content": "OneKOS｜A 级线索待接管" },
+    "subtitle": { "tag": "plain_text", "content": "来自 {{评论线索.平台}} · {{评论线索.最后同步时间}}" },
+    "template": "orange"
+  },
+  "body": {
+    "elements": [
+      {
+        "tag": "markdown",
+        "content": "**原评论**\n{{评论线索.原评论}}\n\n城市：{{评论线索.城市}}｜车型：{{评论线索.车型}}｜购车时间：{{评论线索.购车时间}}｜试驾意愿：{{评论线索.试驾意愿}}"
+      },
+      {
+        "tag": "markdown",
+        "content": "线索分：**{{评论线索.线索分}}**｜等级：**{{评论线索.线索等级}}**\n\n建议：{{评论线索.下一步建议}}\n\n字段证据：{{评论线索.字段证据}}"
+      },
+      {
+        "tag": "action",
+        "actions": [
+          {
+            "tag": "button",
+            "text": { "tag": "plain_text", "content": "我来接管" },
+            "type": "primary",
+            "value": { "action": "takeover_lead", "lead_id": "{{评论线索.线索ID}}", "advisor_id": "{{评论线索.顾问ID}}" }
+          },
+          {
+            "tag": "button",
+            "text": { "tag": "plain_text", "content": "信息不足" },
+            "type": "default",
+            "value": { "action": "mark_incomplete", "lead_id": "{{评论线索.线索ID}}" }
+          }
+        ]
+      },
+      { "tag": "note", "elements": [{ "tag": "plain_text", "content": "SIMULATION｜系统只提供判断与建议，客户触达和销售承诺由顾问人工完成。" }] }
+    ]
+  }
+}

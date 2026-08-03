@@ -1,0 +1,44 @@
+{
+  "schema": "2.0",
+  "config": {
+    "update_multi": true,
+    "style": {
+      "text_size": { "normal_v2": { "default": "normal", "pc": "normal", "mobile": "normal" } }
+    }
+  },
+  "header": {
+    "title": { "tag": "plain_text", "content": "OneKOS｜今日个性化任务" },
+    "subtitle": { "tag": "plain_text", "content": "{{顾问档案.展示名称}} · {{内容任务.任务日期}}" },
+    "template": "indigo"
+  },
+  "body": {
+    "elements": [
+      {
+        "tag": "markdown",
+        "content": "**{{内容任务.内容角度}}**\n\n用户问题：{{内容任务.用户问题}}\n\n匹配分：{{内容任务.路由匹配分}}｜矩阵空白：{{内容任务.矩阵空白}}"
+      },
+      {
+        "tag": "markdown",
+        "content": "为什么适合你：{{内容任务.画像证据说明}}\n\n预计顾问投入：8–12 分钟，只需补真实素材、轻改并确认。"
+      },
+      {
+        "tag": "action",
+        "actions": [
+          {
+            "tag": "button",
+            "text": { "tag": "plain_text", "content": "选择这个任务" },
+            "type": "primary",
+            "value": { "action": "select_topic", "task_id": "{{内容任务.任务ID}}", "advisor_id": "{{顾问档案.顾问ID}}" }
+          },
+          {
+            "tag": "button",
+            "text": { "tag": "plain_text", "content": "今天不适合" },
+            "type": "default",
+            "value": { "action": "reject_topic", "task_id": "{{内容任务.任务ID}}", "advisor_id": "{{顾问档案.顾问ID}}" }
+          }
+        ]
+      },
+      { "tag": "note", "elements": [{ "tag": "plain_text", "content": "SIMULATION｜演示输入为生成数据，最终发布由顾问确认。" }] }
+    ]
+  }
+}
