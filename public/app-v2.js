@@ -179,7 +179,7 @@ function renderStudio() {
   if (!state.content) return `<section class="card empty-state"><span>▤</span><h2>还没有内容任务</h2><p>进入机会雷达选择任务后，创作 Agent 会一次性交付完整内容包。</p><button class="primary" data-page="topics">前往机会雷达</button></section>`;
   const c = state.content;
   return `
-    ${simulationNote('内容由本地确定性规则生成；顾问真实经历和拍摄素材均显示为“待补充”，不会由 AI 编造。')}
+    ${simulationNote(state.content.generator === 'external-llm' ? '内容候选由外部兼容模型生成，并由 OneKOS 服务执行事实、合规、人设、矩阵质检；真实素材仍由顾问补充。' : '内容由本地确定性规则生成；顾问真实经历和拍摄素材均显示为“待补充”，不会由 AI 编造。')}
     ${header('STEP 03 · CREATE', '从选题到可拍摄内容包，一次交付', '事实核保证品牌信息统一，人格壳保留顾问的原话、经历与目标用户表达。', '<button class="secondary" data-action="copy-content">复制内容包</button>')}
     <div class="content-layout">
       <section class="card script-card"><div class="content-title"><span>标题</span><h2>${c.title}</h2><div class="chips">${c.usedProfile.map((item) => `<span>${item}</span>`).join('')}</div></div><article class="script-block hook"><span>前 5 秒开场</span><p>${c.hook}</p></article><article class="script-block"><span>完整口播</span><p>${c.body}</p></article><article class="script-block cta"><span>评论区转化动作</span><p>${c.cta}</p></article></section>
