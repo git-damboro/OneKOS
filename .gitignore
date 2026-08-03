@@ -2,5 +2,6 @@ node_modules/
 output/
 .worktrees/
 *.log
+*.inspect.ndjson
 .DS_Store
 Thumbs.db
