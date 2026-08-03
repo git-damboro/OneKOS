@@ -80,6 +80,20 @@ test('评论转 A 级线索并创建待确认反馈事件', async () => {
   assert.equal(result.eventWrite.action, 'created');
 });
 
+test('结合顾问地域与当前内容主题补全本地高意向评论', async () => {
+  const { service } = createService();
+  const result = await service.analyzeComment({
+    advisorId: 'ADV-017', contentId: 'CONTENT-DEMO-001', commentId: 'COMMENT-LOCAL-001',
+    text: '我在高新区，每天通勤 35 公里，没有家充，这周日可以约 L60 试驾顺便看看换电吗？',
+    likes: 17, platform: '抖音（模拟）', leadId: 'LEAD-LOCAL-001', eventId: 'EVENT-LOCAL-001',
+  });
+
+  assert.equal(result.lead.city, '成都高新区');
+  assert.equal(result.lead.grade, 'A');
+  assert.ok(result.lead.score >= 75);
+  assert.match(result.lead.fieldEvidence.city, /顾问服务城市/);
+});
+
 test('人工确认反馈后才更新画像权重', async () => {
   const { service, repository } = createService();
   await service.analyzeComment({

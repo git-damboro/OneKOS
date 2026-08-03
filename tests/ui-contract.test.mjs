@@ -36,3 +36,30 @@ test('视觉样式覆盖桌面与移动端', async () => {
   assert.match(css, /\.sidebar/);
   assert.match(css, /\.metric/);
 });
+
+test('首页提供飞书落地中心并展示推荐架构与实施边界', async () => {
+  const html = await readFile(path.join(root, 'public', 'index.html'), 'utf8');
+  const source = await readFile(path.join(root, 'public', 'app-v2.js'), 'utf8');
+
+  assert.match(html, /飞书落地中心/);
+  assert.match(source, /renderFeishuImplementation/);
+  for (const phrase of ['飞书多维表格', 'Aily', '机器人卡片', '七张数据表', '五项 Agent 技能', '四条工作流', '真实实现', '模拟输入']) {
+    assert.match(source, new RegExp(phrase));
+  }
+});
+
+test('界面展示运行模式并通过服务 API 执行生成、评论和学习闭环', async () => {
+  const html = await readFile(path.join(root, 'public', 'index.html'), 'utf8');
+  const source = await readFile(path.join(root, 'public', 'app-v2.js'), 'utf8');
+  const apiClient = await readFile(path.join(root, 'public', 'api-client.js'), 'utf8');
+
+  assert.match(html, /id="runtime-status"/);
+  assert.match(source, /getDemoState/);
+  assert.match(source, /generateContent/);
+  assert.match(source, /analyzeComment/);
+  assert.match(source, /confirmFeedback/);
+  assert.match(source, /live|hybrid|simulation/);
+  for (const endpoint of ['/api/demo/state', '/api/content/generate', '/api/comments/analyze', '/confirm']) {
+    assert.match(apiClient, new RegExp(endpoint.replaceAll('/', '\\/')));
+  }
+});

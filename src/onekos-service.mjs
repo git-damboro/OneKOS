@@ -152,8 +152,25 @@ export class OneKosService {
       throw error;
     }
     const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
+    const tags = await this.repository.getProfileTags(advisorId);
+    const extracted = analyzeCommentLead({ commentId, text, platform, likes });
+    if (extracted.city === '待确认' && advisor.city && /高新区/.test(text)) {
+      extracted.city = `${advisor.city}高新区`;
+      extracted.score += 10;
+      extracted.fieldEvidence.city = `原评论“高新区”＋顾问服务城市“${advisor.city}”`;
+    }
+    const localEnergyTag = tags.find((item) => item.status === '生效' && /本地补能/.test(item.label));
+    const scenarioSignals = [/通勤/.test(text), /家充/.test(text), /换电|补能/.test(text), /L60/i.test(text)].filter(Boolean).length;
+    if (localEnergyTag && scenarioSignals >= 3) {
+      extracted.score += 15;
+      extracted.fieldEvidence.profileMatch = `命中生效画像“${localEnergyTag.label}”与当前补能内容主题`;
+    }
+    extracted.score = Math.min(100, extracted.score);
+    extracted.grade = extracted.score >= 75 ? 'A' : extracted.score >= 45 ? 'B' : 'C';
+    extracted.status = extracted.grade === 'A' ? '待顾问人工接管' : '待顾问查看';
+    extracted.nextAction = extracted.grade === 'A' ? '顾问人工确认用户身份、门店、试驾时间与重点需求' : '顾问人工补问缺失字段';
     const lead = {
-      ...analyzeCommentLead({ commentId, text, platform, likes }),
+      ...extracted,
       leadId: leadId || `LEAD-${commentId}`,
       advisorId,
       contentId,
@@ -161,7 +178,6 @@ export class OneKosService {
       updatedAt: this.timestamp(),
     };
     const leadWrite = await this.repository.saveCommentLead(lead);
-    const tags = await this.repository.getProfileTags(advisorId);
     const affectedTag = tags.find((item) => item.tagId === 'TAG-004') || tags.sort((a, b) => b.weight - a.weight)[0];
     const feedbackEvent = {
       eventId: eventId || `EVENT-${commentId}`,

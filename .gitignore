@@ -3,6 +3,7 @@ output/
 .worktrees/
 *.log
 *.inspect.ndjson
+.playwright-cli/
 .DS_Store
 Thumbs.db
 .env
