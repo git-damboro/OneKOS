@@ -62,8 +62,8 @@ def apply_body_font(paragraph, size=9.5, color="253047"):
         run._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
         run.font.size = Pt(size)
         run.font.color.rgb = RGBColor.from_string(color)
-    paragraph.paragraph_format.space_after = Pt(4)
-    paragraph.paragraph_format.line_spacing = 1.15
+    paragraph.paragraph_format.space_after = Pt(3)
+    paragraph.paragraph_format.line_spacing = 1.12
 
 
 def add_table(document, rows):
