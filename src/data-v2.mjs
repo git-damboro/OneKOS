@@ -167,4 +167,9 @@ export const implementationGuides = {
     sources: '正式版使用获授权评论/私信、顾问确认和 CRM/试驾结果。', components: 'Aily 信息抽取、多维表格、飞书提醒、CRM API/Webhook。',
     processing: '按城市、家庭、车型、时间和试驾意愿评分，结果反哺画像与选题。', boundary: '低置信度字段留空；AI 不自动联系用户；高意向必须由顾问接管。',
   },
+  feishu: {
+    title: '飞书推荐架构与可配置交付包', simulated: '本页展示的是可配置架构和本地演示状态，当前没有连接用户的飞书租户。',
+    sources: '仓库提供七张多维表格导入数据、Aily 五技能系统提示词、四条工作流和两张机器人卡片。', components: '飞书多维表格、Aily、机器人卡片、知识库、工作流；外部系统通过授权 API 或 Webhook 接入。',
+    processing: '多维表格保存事实与状态，Aily 进行结构化判断和生成，卡片承载顾问少量决策，反馈事件持续写回。', boundary: '抖音与 CRM 输入仍为模拟；未获授权前不读取真实账号，不自动发布，不自动触达客户。',
+  },
 };
