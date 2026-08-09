@@ -62,8 +62,12 @@ function initialState() {
       advisors: [],
       selectedAdvisorId: '',
       session: null,
+      question: null,
+      questions: [],
       candidates: [],
       result: null,
+      reviewQuestionId: null,
+      selectedWordIndex: 0,
       error: '',
     },
   };
@@ -107,7 +111,7 @@ function renderDashboard() {
   return `
     ${simulationNote('顾问、任务、互动和线索均为贴近真实业务的生成数据，不对应任何真实员工或用户。')}
     <section class="hero">
-      <div><span class="hero-kicker">ONE ADVISOR · ONE AI CONTENT TEAM</span><h2>让一名顾问拥有一支随时待命的内容团队</h2><p>AI 主动完成机会发现、选题、脚本、剪辑规划、评论风向与线索筛选。顾问每天只需补素材、轻改、确认和接管高意向客户。</p><div class="actions"><button class="primary light" data-page="profile">从 10 分钟首次校准开始 →</button><button class="ghost light" data-action="open-guide">为什么真实可行</button></div></div>
+      <div><span class="hero-kicker">ONE ADVISOR · ONE AI CONTENT TEAM</span><h2>让一名顾问拥有一支随时待命的内容团队</h2><p>AI 主动完成机会发现、选题、脚本、剪辑规划、评论风向与线索筛选。顾问每天只需补素材、轻改、确认和接管高意向客户。</p><div class="actions"><button class="primary light" data-page="profile">从 3—5 分钟画像问卷开始 →</button><button class="ghost light" data-action="open-guide">为什么真实可行</button></div></div>
       <div class="hero-score"><small>本轮闭环进度</small><strong>${progress}<em>/6</em></strong><span>${progress ? 'AI 团队正在协作' : '等待顾问首次校准'}</span></div>
     </section>
     <section class="metrics four">
@@ -206,6 +210,63 @@ function renderProfile() {
         <h4>最近学习证据</h4><div class="event-list">${p.events.length ? p.events.slice(0, 5).map((event) => `<div><span>${event.time}</span><strong>${event.type}</strong><p>${event.detail}</p></div>`).join('') : '<p class="empty-copy">完成首次校准后，将在这里记录每次画像变化的证据。</p>'}</div>
       </aside>
     </div>`;
+}
+
+function renderQuizProfile() {
+  const onboarding = state.onboarding;
+  const session = onboarding.session;
+  const selectedAdvisor = onboarding.advisors.find((item) => item.advisorId === onboarding.selectedAdvisorId);
+  const storedSessionId = localStorage.getItem(ONBOARDING_STORAGE_KEY);
+  const advisorOptions = onboarding.advisors.map((advisor) => `
+    <button class="advisor-option ${onboarding.selectedAdvisorId === advisor.advisorId ? 'selected' : ''}" data-action="select-advisor" data-advisor-id="${escapeHtml(advisor.advisorId)}">
+      <strong>${escapeHtml(advisor.displayName || advisor.advisorId)}</strong><span>${escapeHtml(advisor.city || '城市待补充')} · ${advisor.initializationStatus === 'active' ? '已有画像' : '待初始化'}</span>
+    </button>`).join('');
+  const question = onboarding.reviewQuestionId
+    ? onboarding.questions.find((item) => item.id === onboarding.reviewQuestionId)
+    : onboarding.question;
+  const answeredCount = session ? Object.keys(session.answers || {}).length : 0;
+  const totalQuestions = session?.questionIds?.length || 8;
+  const currentIndex = question ? Math.max(0, session.questionIds.indexOf(question.id)) : totalQuestions;
+  const currentAnswer = question ? session?.answers?.[question.id] : '';
+  const questionInput = question?.type === 'text'
+    ? `<div class="writing-answer"><span>短文表达题</span><textarea id="quiz-answer-text" placeholder="${escapeHtml(question.placeholder || '')}">${escapeHtml(currentAnswer || '')}</textarea><small>系统分析的是表达方式，不评判答案对错。</small></div>`
+    : `<div class="quiz-options">${(question?.options || []).map((option, index) => `<label class="quiz-option"><input type="radio" name="quiz-answer" value="${escapeHtml(option.value)}" ${currentAnswer === option.value ? 'checked' : ''}><b>${String.fromCharCode(65 + index)}</b><span>${escapeHtml(option.label)}</span></label>`).join('')}</div>`;
+  const selectedWord = onboarding.candidates[onboarding.selectedWordIndex] || onboarding.candidates[0];
+  const dimensions = { 专业能力: 'skill', 地域场景: 'location', 目标用户: 'audience', 表达结构: 'structure', 表达语气: 'tone', 证据偏好: 'evidence', 内容形式: 'format', 转化能力: 'conversion', 禁用表达: 'forbidden' };
+  const cloud = onboarding.candidates.map((word, index) => {
+    const size = Math.round(12 + Math.max(0, word.weight - 45) * 0.38);
+    const opacity = Math.max(0.48, Number(word.confidence || 50) / 100);
+    return `<button class="cloud-word ${dimensions[word.dimension] || 'default'} ${word.locked ? 'locked' : ''} ${index === onboarding.selectedWordIndex ? 'selected' : ''}" style="--word-size:${size}px;--word-opacity:${opacity}" data-action="select-cloud-word" data-index="${index}">${escapeHtml(word.term || word.label)}</button>`;
+  }).join('');
+  const evidence = selectedWord ? (Array.isArray(selectedWord.evidence) ? selectedWord.evidence : [selectedWord.evidence]).filter(Boolean) : [];
+  const sources = selectedWord ? (selectedWord.sources || selectedWord.sourceRefs || [selectedWord.source]).filter(Boolean) : [];
+
+  return `
+    ${simulationNote('问卷答案与画像词均为顾问主动提供或由其答案计算；模型不可用时自动使用本地规则。')}
+    ${header('STEP 01 · KNOW ME', '用一题一屏认识顾问', '基础问卷＋自适应追问＋情景判断＋短文表达题，3—5 分钟形成可解释的词云画像。', state.calibrated ? '<button class="secondary" data-page="topics">进入机会雷达 →</button>' : '')}
+    <section class="card quiz-shell">
+      <div class="quiz-stage-bar"><span class="${!session ? 'active' : 'done'}">1 选择身份</span><span class="${session?.status === 'quiz_active' ? 'active' : session ? 'done' : ''}">2 基础问卷</span><span class="${session?.adaptiveQuestionIds?.length ? 'active' : ''}">3 自适应追问</span><span class="${onboarding.candidates.length ? 'active' : ''}">4 词云画像</span></div>
+      ${!session ? `
+        <div class="quiz-identity">
+          <div class="identity-copy"><span class="eyebrow">ADVISOR IDENTITY</span><h3>先选择顾问身份</h3><p>已有顾问无需重复填资料；新顾问只填写姓名、城市、门店。</p></div>
+          <div class="advisor-options">${advisorOptions || '<span class="empty-copy">正在读取顾问列表…</span>'}</div>
+          ${selectedAdvisor ? `<div class="selected-advisor-card"><div><strong>${escapeHtml(selectedAdvisor.displayName)}</strong><span>${escapeHtml(selectedAdvisor.city)} · ${escapeHtml(selectedAdvisor.store || '门店待补充')}</span></div><button class="primary" data-action="create-quiz-session" data-advisor-id="${escapeHtml(selectedAdvisor.advisorId)}">使用这个顾问开始</button></div>` : `
+          <form class="identity-mini-form" id="quiz-identity-form"><label>姓名<input name="displayName" value="顾问小林" required></label><label>城市<input name="city" value="成都" required></label><label>门店<input name="store" value="成都模拟门店" required></label><button class="primary" type="button" data-action="create-quiz-session">创建新顾问并开始</button></form>`}
+          ${storedSessionId ? `<div class="resume-card"><div><strong>发现未完成问卷</strong><span>${escapeHtml(storedSessionId)}</span></div><button class="secondary" data-action="resume-quiz">恢复答题</button></div>` : ''}
+        </div>` : ''}
+      ${session?.status === 'quiz_active' ? `
+        <section class="quiz-card">
+          <div class="quiz-progress"><div><span>${question?.adaptive ? '自适应追问' : question?.type === 'text' ? '表达测试' : '基础问卷'}</span><strong>${Math.min(currentIndex + 1, totalQuestions)} / ${totalQuestions}</strong></div><i><b style="width:${Math.round(answeredCount / totalQuestions * 100)}%"></b></i></div>
+          ${question ? `<div class="question-kicker">${question.type === 'text' ? 'WRITING' : 'SCENARIO · 情景判断'}</div><h2>${escapeHtml(question.title)}</h2>${questionInput}<div class="quiz-actions"><button class="secondary" data-action="previous-quiz-question">返回上一题</button><button class="primary" data-action="submit-quiz-answer" data-question-id="${question.id}">${currentAnswer ? '保存修改' : '确认并继续'} →</button></div>` : `<div class="quiz-finished"><span>✓</span><h2>答题完成</h2><p>已完成 ${answeredCount} 道基础与自适应题目，可以生成当前顾问的画像词云。</p><button class="primary" data-action="complete-quiz">生成词云画像</button></div>`}
+        </section>` : ''}
+      ${onboarding.candidates.length ? `
+        <section class="word-cloud-section">
+          <div class="word-cloud-head"><div><span class="eyebrow">PROFILE WORD CLOUD</span><h2>词云画像</h2><p>字号代表权重，颜色代表维度，透明度代表置信度；点击画像词查看来源和证据。</p></div><span class="word-count">${onboarding.candidates.length}<small>画像词</small></span></div>
+          <div class="word-cloud-layout"><div class="profile-word-cloud">${cloud}</div>${selectedWord ? `<aside class="word-detail"><span>${escapeHtml(selectedWord.dimension)}</span><h3>${escapeHtml(selectedWord.term || selectedWord.label)}</h3><div class="word-scores"><b>权重 ${selectedWord.weight}</b><b>置信度 ${selectedWord.confidence}</b></div><h4>来源</h4><p>${sources.map(escapeHtml).join(' · ')}</p><h4>证据</h4>${evidence.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}<div class="word-actions"><button data-action="lower-cloud-word" data-index="${onboarding.selectedWordIndex}">降低权重</button><button data-action="lock-cloud-word" data-index="${onboarding.selectedWordIndex}">${selectedWord.locked ? '已锁定' : '锁定词语'}</button><button data-action="remove-cloud-word" data-index="${onboarding.selectedWordIndex}">删除词语</button></div></aside>` : ''}</div>
+          <div class="confirm-bar"><span>确认后形成画像 V1，并根据高权重词创建第一条内容任务。</span><button class="primary" data-action="confirm-word-cloud">确认词云画像 V1</button></div>
+        </section>` : ''}
+      ${onboarding.error ? `<p class="onboarding-error">${escapeHtml(onboarding.error)}</p>` : ''}
+    </section>`;
 }
 
 function renderTopics() {
@@ -443,6 +504,31 @@ async function resumeOnboardingSession(sessionId = localStorage.getItem(ONBOARDI
   }
 }
 
+function applyQuizPayload(data) {
+  state.onboarding.session = data.session;
+  state.onboarding.question = data.question || null;
+  state.onboarding.questions = data.questions || state.onboarding.questions || [];
+  state.onboarding.candidates = clone(data.session?.candidates || []).map((item) => ({ ...item, locked: item.status === '锁定' || item.locked }));
+  state.onboarding.selectedAdvisorId = data.session?.advisorId || state.onboarding.selectedAdvisorId;
+  state.onboarding.reviewQuestionId = null;
+  state.onboarding.selectedWordIndex = 0;
+  state.onboarding.error = '';
+  if (data.session?.advisorId) state.currentAdvisorId = data.session.advisorId;
+}
+
+async function resumeQuizSession(sessionId = localStorage.getItem(ONBOARDING_STORAGE_KEY)) {
+  if (!sessionId) return;
+  try {
+    const payload = await oneKosApi.getQuizSession(sessionId);
+    applyQuizPayload(payload.data);
+    if (state.page === 'profile') render();
+  } catch (error) {
+    localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+    state.onboarding.error = `无法恢复问卷：${error.message}`;
+    if (state.page === 'profile') render();
+  }
+}
+
 async function refreshBackendState({ notify = false } = {}) {
   try {
     const payload = await oneKosApi.getDemoState(state.currentAdvisorId, state.currentTaskId);
@@ -520,7 +606,7 @@ function render() {
   breadcrumb.textContent = `OneKOS / ${trail}`;
   document.title = `${title}｜千面·OneKOS`;
   document.querySelectorAll('[data-page]').forEach((button) => button.classList.toggle('active', button.dataset.page === state.page));
-  const views = { dashboard: renderDashboard, profile: renderProfile, topics: renderTopics, studio: renderStudio, quality: renderQuality, comments: renderComments, leads: renderLeads, feishu: renderFeishuImplementation };
+  const views = { dashboard: renderDashboard, profile: renderQuizProfile, topics: renderTopics, studio: renderStudio, quality: renderQuality, comments: renderComments, leads: renderLeads, feishu: renderFeishuImplementation };
   app.innerHTML = views[state.page]();
   renderGuide();
   updateRuntimeBadge();
@@ -560,9 +646,105 @@ document.addEventListener('click', async (event) => {
     if (!advisor) return;
     state.onboarding.selectedAdvisorId = advisor.advisorId;
     state.currentAdvisorId = advisor.advisorId;
-    if (advisor.initializationStatus === 'active') state.calibrated = true;
     render();
     showToast(`已选择顾问：${advisor.displayName || advisor.advisorId}`);
+  } else if (action === 'create-quiz-session') {
+    const advisor = state.onboarding.advisors.find((item) => item.advisorId === target.dataset.advisorId);
+    let input;
+    if (advisor) {
+      input = { advisorId: advisor.advisorId, displayName: advisor.displayName, city: advisor.city, store: advisor.store || '门店待补充', identitySource: advisor.identitySource || 'demo' };
+    } else {
+      const form = document.querySelector('#quiz-identity-form');
+      if (!form?.reportValidity()) return;
+      const data = new FormData(form);
+      input = { advisorId: `ADV-QUIZ-${String(Date.now()).slice(-8)}`, displayName: data.get('displayName'), city: data.get('city'), store: data.get('store'), identitySource: 'demo' };
+    }
+    try {
+      const payload = await oneKosApi.createQuizSession(input);
+      applyQuizPayload(payload.data);
+      localStorage.setItem(ONBOARDING_STORAGE_KEY, payload.data.session.sessionId);
+      render();
+      showToast('问卷已开始，每道答案都会自动保存');
+    } catch (error) {
+      state.onboarding.error = error.message;
+      render();
+    }
+  } else if (action === 'resume-quiz') {
+    await resumeQuizSession();
+    showToast(state.onboarding.session ? '已恢复到上次答题位置' : '没有可恢复的问卷', state.onboarding.session ? '' : 'warning');
+  } else if (action === 'previous-quiz-question') {
+    const session = state.onboarding.session;
+    const answered = session.questionIds.filter((questionId) => questionId in session.answers);
+    const currentReviewIndex = state.onboarding.reviewQuestionId ? answered.indexOf(state.onboarding.reviewQuestionId) : answered.length;
+    state.onboarding.reviewQuestionId = answered[Math.max(0, currentReviewIndex - 1)] || null;
+    render();
+  } else if (action === 'submit-quiz-answer') {
+    const questionId = target.dataset.questionId;
+    const question = state.onboarding.questions.find((item) => item.id === questionId) || state.onboarding.question;
+    const value = question?.type === 'text'
+      ? document.querySelector('#quiz-answer-text')?.value.trim()
+      : document.querySelector('input[name="quiz-answer"]:checked')?.value;
+    if (!value) {
+      showToast('请选择或填写答案后继续', 'warning');
+      return;
+    }
+    try {
+      const payload = await oneKosApi.submitQuizAnswer(state.onboarding.session.sessionId, { questionId, value });
+      applyQuizPayload(payload.data);
+      render();
+      showToast(payload.data.session.currentQuestionId ? '答案已保存' : '所有题目已完成，可以生成词云');
+    } catch (error) {
+      state.onboarding.error = error.message;
+      render();
+    }
+  } else if (action === 'complete-quiz') {
+    try {
+      const payload = await oneKosApi.completeQuizSession(state.onboarding.session.sessionId);
+      applyQuizPayload(payload.data);
+      render();
+      showToast(`已生成 ${state.onboarding.candidates.length} 个可解释画像词`);
+    } catch (error) {
+      state.onboarding.error = error.message;
+      render();
+    }
+  } else if (action === 'select-cloud-word') {
+    state.onboarding.selectedWordIndex = Number(target.dataset.index);
+    render();
+  } else if (action === 'remove-cloud-word') {
+    state.onboarding.candidates.splice(Number(target.dataset.index), 1);
+    state.onboarding.selectedWordIndex = Math.max(0, Math.min(state.onboarding.selectedWordIndex, state.onboarding.candidates.length - 1));
+    render();
+  } else if (action === 'lower-cloud-word') {
+    const word = state.onboarding.candidates[Number(target.dataset.index)];
+    if (word) word.weight = Math.max(0, word.weight - 10);
+    render();
+  } else if (action === 'lock-cloud-word') {
+    const word = state.onboarding.candidates[Number(target.dataset.index)];
+    if (word) word.locked = !word.locked;
+    render();
+  } else if (action === 'confirm-word-cloud') {
+    const acceptedTags = state.onboarding.candidates.map((word) => ({ tagId: word.tagId, label: word.term || word.label, weight: word.weight, locked: Boolean(word.locked) }));
+    if (!acceptedTags.length) {
+      showToast('至少保留一个画像词', 'warning');
+      return;
+    }
+    try {
+      const sessionId = state.onboarding.session.sessionId;
+      const payload = await oneKosApi.confirmQuizSession(sessionId, acceptedTags, `WEB-${sessionId}`);
+      state.onboarding.result = payload.data;
+      state.onboarding.session = payload.data.session;
+      state.profile = onboardingTagsToProfile(payload.data);
+      state.calibrated = true;
+      state.currentAdvisorId = payload.data.advisor.advisorId;
+      state.currentTaskId = payload.data.task.taskId;
+      localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+      navigate('topics');
+      showToast('词云画像 V1 已确认，正在进入机会雷达');
+    } catch (error) {
+      state.onboarding.error = error.message;
+      render();
+      showToast(`画像确认失败：${error.message}`, 'warning');
+    }
   } else if (action === 'resume-onboarding') {
     await resumeOnboardingSession();
     showToast(state.onboarding.session ? '已恢复上次画像初始化进度' : '没有可恢复的初始化进度', state.onboarding.session ? '' : 'warning');
@@ -777,4 +959,4 @@ document.addEventListener('click', async (event) => {
 render();
 refreshBackendState();
 loadAdvisors();
-resumeOnboardingSession();
+resumeQuizSession();

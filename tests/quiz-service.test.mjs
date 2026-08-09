@@ -38,6 +38,7 @@ test('问卷服务逐题保存、恢复、生成词云并确认画像与首条�
   const confirmed = await service.confirmOnboardingSession(answered.sessionId, { acceptedTags, idempotencyKey: 'QUIZ-CONFIRM-001' });
 
   assert.equal(restored.session.currentQuestionId, null);
+  assert.equal(restored.questions.length, restored.session.questionIds.length);
   assert.ok(completed.session.candidates.length >= 30);
   assert.equal(confirmed.advisor.profileVersion, 1);
   assert.equal(confirmed.task.taskId, 'TASK-ADV-QUIZ-001-001');

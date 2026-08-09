@@ -64,30 +64,31 @@ test('界面展示运行模式并通过服务 API 执行生成、评论和学习
   }
 });
 
-test('画像页提供可恢复的三分钟初始化、候选编辑与确认闭环', async () => {
+test('画像页提供可恢复的一题一屏问卷和可纠偏词云', async () => {
   const source = await readFile(path.join(root, 'public', 'app-v2.js'), 'utf8');
   const apiClient = await readFile(path.join(root, 'public', 'api-client.js'), 'utf8');
   const css = await readFile(path.join(root, 'public', 'styles-v2.css'), 'utf8');
 
   for (const phrase of [
-    '3 分钟画像初始化', '选择已有顾问', '创建模拟顾问', '历史内容', '语音转写', '禁用表达',
-    '候选画像', '置信度', '来源', '证据', '删除候选', '降低权重', '锁定标签', '进入机会雷达',
+    '一题一屏', '基础问卷', '自适应追问', '情景判断', '短文表达题',
+    '词云画像', '画像词', '置信度', '来源', '证据', '删除词语', '降低权重', '锁定词语', '进入机会雷达',
   ]) {
     assert.match(source, new RegExp(phrase));
   }
   for (const action of [
-    'select-advisor', 'start-onboarding', 'resume-onboarding', 'generate-onboarding',
-    'remove-onboarding-tag', 'lower-onboarding-tag', 'lock-onboarding-tag', 'confirm-onboarding',
+    'select-advisor', 'create-quiz-session', 'resume-quiz', 'submit-quiz-answer', 'previous-quiz-question',
+    'complete-quiz', 'select-cloud-word', 'remove-cloud-word', 'lower-cloud-word', 'lock-cloud-word', 'confirm-word-cloud',
   ]) {
     assert.match(source, new RegExp(action));
   }
   for (const method of [
-    'listAdvisors', 'createAdvisor', 'createOnboardingSession', 'getOnboardingSession',
-    'generateOnboardingCandidates', 'confirmOnboardingSession',
+    'listAdvisors', 'createQuizSession', 'getQuizSession', 'submitQuizAnswer', 'completeQuizSession', 'confirmQuizSession',
   ]) {
     assert.match(apiClient, new RegExp(method));
   }
   assert.match(source, /localStorage/);
-  assert.match(css, /\.onboarding-form/);
-  assert.match(css, /\.candidate-tag/);
+  assert.match(css, /\.quiz-card/);
+  assert.match(css, /\.profile-word-cloud/);
+  assert.match(css, /\.cloud-word/);
+  assert.match(css, /\.word-detail/);
 });

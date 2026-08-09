@@ -81,6 +81,13 @@ function modelPrompt(context) {
   return JSON.stringify(safeContext, null, 2);
 }
 
+function quizView(session) {
+  return {
+    question: session.currentQuestionId ? getQuestion(session.currentQuestionId) : null,
+    questions: session.questionIds.map((questionId) => getQuestion(questionId)),
+  };
+}
+
 function onboardingModelPrompt(input) {
   return JSON.stringify({
     advisor: {
@@ -187,7 +194,7 @@ export class OneKosService {
     const [advisorWrite, sessionWrite] = await Promise.all([
       this.repository.saveAdvisor(advisor), this.repository.saveOnboardingSession(session),
     ]);
-    return { advisor, session, question: getQuestion(session.currentQuestionId), advisorWrite, sessionWrite };
+    return { advisor, session, ...quizView(session), advisorWrite, sessionWrite };
   }
 
   async getQuizSession(sessionId) {
@@ -197,14 +204,14 @@ export class OneKosService {
       error.statusCode = 409;
       throw error;
     }
-    return { session, question: session.currentQuestionId ? getQuestion(session.currentQuestionId) : null };
+    return { session, ...quizView(session) };
   }
 
   async submitQuizAnswer(sessionId, answer) {
     const { session } = await this.getQuizSession(sessionId);
     const updated = recordQuizAnswer(session, answer, this.timestamp());
     const write = await this.repository.saveOnboardingSession(updated);
-    return { session: updated, question: updated.currentQuestionId ? getQuestion(updated.currentQuestionId) : null, write };
+    return { session: updated, ...quizView(updated), write };
   }
 
   async completeQuizSession(sessionId) {

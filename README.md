@@ -45,7 +45,7 @@ npm start
 | 页面 | 核心价值 |
 |---|---|
 | AI 内容工作台 | 顾问只做补素材、轻改、确认、接管四类动作 |
-| 动态顾问画像 | 标签带权重、置信度、来源和证据，可纠偏、可确认后学习 |
+| 动态顾问画像 | 一题一屏完成基础问卷与自适应追问，生成 30—50 个带权重、置信度、来源和证据的可纠偏词云 |
 | 机会雷达与选题 | 品牌任务、用户问题、画像匹配和矩阵空白共同路由 1—3 个任务 |
 | 内容创作室 | 交付开场、脚本、分镜、素材、标题、评论预案和转化动作 |
 | 矩阵调度与质检 | 事实、合规、人设、矩阵四重质检和回声室探测 |
@@ -59,6 +59,11 @@ npm start
 |---|---|---|
 | GET | `/api/health` | 运行模式与连接配置状态 |
 | GET | `/api/demo/state` | 顾问、任务、标签、品牌事实和当前成果 |
+| POST | `/api/onboarding/quiz-sessions` | 创建画像问卷会话与顾问身份 |
+| GET | `/api/onboarding/quiz-sessions/:id` | 恢复问卷进度和当前题目 |
+| POST | `/api/onboarding/quiz-sessions/:id/answers` | 逐题保存基础题或自适应追问答案 |
+| POST | `/api/onboarding/quiz-sessions/:id/complete` | 生成 30—50 个可解释画像词 |
+| POST | `/api/onboarding/quiz-sessions/:id/confirm` | 确认词云画像 V1 并创建首条任务 |
 | POST | `/api/content/generate` | 生成、四重质检并按内容 ID 幂等写回 |
 | POST | `/api/comments/analyze` | 抽取评论字段，写回线索与待确认反馈事件 |
 | POST | `/api/feedback/:eventId/confirm` | 顾问人工确认后更新画像权重 |
