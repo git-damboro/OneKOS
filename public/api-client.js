@@ -40,6 +40,13 @@ export const oneKosApi = {
   health: () => request('/api/health', { timeoutMs: 10_000 }),
   listAdvisors: () => request('/api/advisors'),
   createAdvisor: (input) => request('/api/advisors', { method: 'POST', body: input }),
+  createQuizSession: (input) => request('/api/onboarding/quiz-sessions', { method: 'POST', body: input }),
+  getQuizSession: (sessionId) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}`),
+  submitQuizAnswer: (sessionId, answer) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}/answers`, { method: 'POST', body: answer }),
+  completeQuizSession: (sessionId) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}/complete`, { method: 'POST', body: {} }),
+  confirmQuizSession: (sessionId, acceptedTags, idempotencyKey) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}/confirm`, {
+    method: 'POST', body: { acceptedTags }, headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : {},
+  }),
   createOnboardingSession: (input) => request('/api/onboarding/sessions', { method: 'POST', body: input }),
   getOnboardingSession: (sessionId) => request(`/api/onboarding/sessions/${encodeURIComponent(sessionId)}`),
   generateOnboardingCandidates: (sessionId) => request(`/api/onboarding/sessions/${encodeURIComponent(sessionId)}/generate`, { method: 'POST', body: {} }),

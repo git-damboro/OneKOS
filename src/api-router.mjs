@@ -92,6 +92,39 @@ export function createApiHandler({ service, runtimeStatus }) {
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }
+      if (request.method === 'POST' && url.pathname === '/api/onboarding/quiz-sessions') {
+        const data = await service.createQuizSession(await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizAnswerMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)\/answers$/);
+      if (quizAnswerMatch) {
+        const data = await service.submitQuizAnswer(decodeURIComponent(quizAnswerMatch[1]), await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizCompleteMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)\/complete$/);
+      if (quizCompleteMatch) {
+        await readJsonBody(request);
+        const data = await service.completeQuizSession(decodeURIComponent(quizCompleteMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizConfirmMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)\/confirm$/);
+      if (quizConfirmMatch) {
+        const body = await readJsonBody(request);
+        const data = await service.confirmOnboardingSession(decodeURIComponent(quizConfirmMatch[1]), {
+          acceptedTags: body.acceptedTags || [], idempotencyKey: request.headers['idempotency-key'] || body.idempotencyKey || '',
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizSessionMatch = request.method === 'GET' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)$/);
+      if (quizSessionMatch) {
+        const data = await service.getQuizSession(decodeURIComponent(quizSessionMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
       if (request.method === 'POST' && url.pathname === '/api/onboarding/sessions') {
         const data = await service.createOnboardingSession(await readJsonBody(request));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);

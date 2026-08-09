@@ -131,3 +131,31 @@ test('不存在的初始化会话保持统一 404 错误结构', async () => {
     assert.ok(payload.error.requestId);
   });
 });
+
+test('问卷初始化 API 支持创建、恢复、逐题提交、完成和确认', async () => {
+  const calls = [];
+  const service = {
+    async createQuizSession(body) { calls.push(['create', body]); return { session: { sessionId: 'QUIZ/001' } }; },
+    async getQuizSession(id) { calls.push(['get', id]); return { session: { sessionId: id, status: 'quiz_active' } }; },
+    async submitQuizAnswer(id, body) { calls.push(['answer', id, body]); return { session: { sessionId: id, currentQuestionId: 'Q-2' } }; },
+    async completeQuizSession(id) { calls.push(['complete', id]); return { session: { sessionId: id, status: 'generated', candidates: [] } }; },
+    async confirmOnboardingSession(id, body) { calls.push(['confirm', id, body]); return { task: { taskId: 'TASK-QUIZ-001' } }; },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const created = await jsonPost(`${baseUrl}/api/onboarding/quiz-sessions`, { advisorId: 'ADV-QUIZ-001' }).then((response) => response.json());
+    assert.equal(created.data.session.sessionId, 'QUIZ/001');
+    const path = `${baseUrl}/api/onboarding/quiz-sessions/${encodeURIComponent('QUIZ/001')}`;
+    assert.equal((await fetch(path).then((response) => response.json())).data.session.status, 'quiz_active');
+    assert.equal((await jsonPost(`${path}/answers`, { questionId: 'Q-1', value: 'A' }).then((response) => response.json())).data.session.currentQuestionId, 'Q-2');
+    assert.equal((await jsonPost(`${path}/complete`, {}).then((response) => response.json())).data.session.status, 'generated');
+    const confirmed = await fetch(`${path}/confirm`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'QUIZ-CONFIRM-001' },
+      body: JSON.stringify({ acceptedTags: [{ tagId: 'TERM-001' }] }),
+    }).then((response) => response.json());
+    assert.equal(confirmed.data.task.taskId, 'TASK-QUIZ-001');
+  });
+
+  assert.deepEqual(calls.map((item) => item[0]), ['create', 'get', 'answer', 'complete', 'confirm']);
+  assert.equal(calls.at(-1)[2].idempotencyKey, 'QUIZ-CONFIRM-001');
+});
