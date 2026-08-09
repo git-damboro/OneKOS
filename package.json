@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
+    "demo:production": "node scripts/run-production-demo.mjs",
     "test": "node --test",
     "smoke": "node scripts/smoke.mjs",
     "check": "npm test && npm run smoke"

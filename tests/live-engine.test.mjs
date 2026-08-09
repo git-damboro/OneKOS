@@ -39,6 +39,27 @@ test('画像引用有效且矩阵空白时通过质检', () => {
   assert.equal(result.matrix.risk, '低');
 });
 
+test('事实门禁拒绝拍摄前编造现场数字和已完成实测', () => {
+  const result = inspectContentPackage({
+    content: {
+      title: '晚高峰补能实测',
+      hook: '我今天实测给你看',
+      script: '出发时电量30%，导航显示排队2人，全程用时40分钟。',
+      factRefs: [],
+      profileRefs: ['TAG-1'],
+    },
+    knowledge: activeKnowledge,
+    profileTags: tags,
+    task: { userQuestion: '每天通勤42公里怎么办？', topic: '拍摄补能路线', targetModel: '乐道 L60' },
+    matrixContents: [],
+  });
+
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.fact.unsupportedNumbers.sort(), ['2', '30', '40']);
+  assert.ok(result.fact.pretendCompletedHits > 0);
+  assert.ok(result.issues.some((issue) => issue.includes('待实拍数据')));
+});
+
 test('回声室探测器识别近重复内容', () => {
   const result = inspectContentPackage({
     content: {

@@ -12,10 +12,11 @@ async function request(path, { method = 'GET', body, headers = {}, timeoutMs = 6
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const isFormData = body instanceof FormData;
     const response = await fetch(path, {
       method,
-      headers: body === undefined ? headers : { 'content-type': 'application/json', ...headers },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: body === undefined || isFormData ? headers : { 'content-type': 'application/json', ...headers },
+      body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => null);
@@ -61,7 +62,20 @@ export const oneKosApi = {
   decideOpportunity: (taskId, advisorId, decision, reason = '') => request(`/api/opportunities/${encodeURIComponent(taskId)}/decision`, {
     method: 'POST', body: { advisorId, decision, reason },
   }),
-  generateContent: (input) => request('/api/content/generate', { method: 'POST', body: input }),
+  generateContent: (input) => request('/api/content/generate', { method: 'POST', body: input, timeoutMs: 120_000 }),
+  getContentPackage: (contentId) => request(`/api/content/${encodeURIComponent(contentId)}`),
+  getContentMaterials: (contentId) => request(`/api/content/${encodeURIComponent(contentId)}/materials`),
+  uploadAsset: (contentId, slotId, { file, advisorId, durationSec = 0, width = 0, height = 0 }) => {
+    const form = new FormData();
+    form.set('file', file);
+    form.set('advisorId', advisorId);
+    form.set('durationSec', String(durationSec));
+    form.set('width', String(width));
+    form.set('height', String(height));
+    return request(`/api/content/${encodeURIComponent(contentId)}/assets/${encodeURIComponent(slotId)}`, {
+      method: 'POST', body: form, timeoutMs: 120_000,
+    });
+  },
   analyzeComment: (input) => request('/api/comments/analyze', { method: 'POST', body: input }),
   confirmFeedback: (eventId) => request(`/api/feedback/${encodeURIComponent(eventId)}/confirm`, { method: 'POST', body: {} }),
 };

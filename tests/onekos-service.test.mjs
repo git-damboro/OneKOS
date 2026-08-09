@@ -130,7 +130,11 @@ test('生成内容并按内容 ID 幂等写回', async () => {
   assert.equal(first.content.status, '待顾问补真实素材');
   assert.equal(first.content.simulation, true);
   assert.equal(first.quality.passed, true);
+  assert.equal(first.content.schemaVersion, '2.0');
+  assert.ok(first.content.shots.length > 0);
+  assert.ok(first.shootingRequirements.every((item) => item.slotId.startsWith('CONTENT-TEST-001-SLOT-')));
   assert.equal(repository.snapshot().contentResults.filter((item) => item.contentId === 'CONTENT-TEST-001').length, 1);
+  assert.equal(repository.snapshot().shootingRequirements.length, first.shootingRequirements.length);
 });
 
 test('配置模型时使用模型候选结果，但仍由服务端质检和落库', async () => {
@@ -153,6 +157,41 @@ test('配置模型时使用模型候选结果，但仍由服务端质检和落�
   assert.equal(calls, 1);
   assert.equal(result.generator, 'external-llm');
   assert.equal(result.quality.passed, true);
+  assert.equal(result.content.schemaVersion, '2.0');
+  assert.equal(result.content.shots.length, 3);
+});
+
+test('生产演示用代码比较 JSON2/JSON3，齐全后创建剪辑任务', async () => {
+  const { service, repository } = createService();
+  const result = await service.runProductionDemo({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-PIPELINE-001' });
+
+  assert.equal(result.json2.schemaVersion, '2.0');
+  assert.equal(result.json3.simulation, true);
+  assert.equal(result.comparison.complete, true);
+  assert.equal(result.comparison.requiredCount, result.comparison.matchedCount);
+  assert.equal(result.editingJob.status, '待剪辑');
+  assert.equal(result.editingJob.simulation, true);
+  assert.ok(result.json3.uploadedAssets.every((asset) => asset.fileToken === null && asset.simulation === true));
+  assert.equal(repository.snapshot().advisorAssets.length, result.comparison.requiredCount);
+  assert.equal(repository.snapshot().editingJobs.length, 1);
+  assert.ok(repository.snapshot().shootingRequirements.every((item) => item.status === '检查通过'));
+});
+
+test('顾问上传一个真实素材后立即检查并重新组装 JSON3', async () => {
+  const { service, repository } = createService();
+  const generation = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-UPLOAD-001' });
+  const requirement = generation.shootingRequirements[0];
+  const result = await service.uploadAdvisorAsset({
+    contentId: 'CONTENT-UPLOAD-001', slotId: requirement.slotId, advisorId: 'ADV-017',
+    fileName: 'opening.mp4', mimeType: 'video/mp4', bytes: new Uint8Array([1, 2, 3]),
+    durationSec: Math.max(9, requirement.minDurationSec), width: 1080, height: 1920,
+  });
+
+  assert.equal(result.checkedAsset.status, 'available');
+  assert.equal(result.comparison.matchedCount, 1);
+  assert.equal(result.status, 'waiting_upload');
+  assert.equal(result.json3.uploadedAssets.find((asset) => asset.slotId === requirement.slotId).fileName, 'opening.mp4');
+  assert.equal(repository.snapshot().advisorAssets.find((asset) => asset.slotId === requirement.slotId).technicalCheckStatus, '检查通过');
 });
 
 test('评论转 A 级线索并创建待确认反馈事件', async () => {
