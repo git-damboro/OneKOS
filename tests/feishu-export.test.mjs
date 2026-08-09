@@ -17,6 +17,7 @@ test('导出字段保留稳定主键、关联键和证据列', () => {
   const files = buildCsvFiles();
 
   assert.match(files['02-画像标签.csv'], /标签ID,顾问ID,维度,标签,权重,置信度,来源,证据/);
+  assert.match(files['04-内容任务.csv'], /路由时间,顾问决策,拒绝原因,决策时间/);
   assert.match(files['05-内容成果.csv'], /内容ID,任务ID/);
   assert.match(files['06-评论线索.csv'], /线索ID,评论ID,顾问ID,内容ID/);
   assert.match(files['06-评论线索.csv'], /字段证据/);

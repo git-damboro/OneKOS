@@ -25,7 +25,9 @@ export const CSV_DEFINITIONS = {
   '04-内容任务.csv': ['contentTasks', [
     ['taskId', '任务ID'], ['advisorId', '顾问ID'], ['taskDate', '任务日期'], ['userQuestion', '用户问题'],
     ['topic', '内容角度'], ['targetModel', '目标车型'], ['routeScore', '路由匹配分'],
-    ['profileEvidence', '画像证据ID'], ['matrixGap', '矩阵空白'], ['status', '状态'], ['simulation', '模拟数据'],
+    ['profileEvidence', '画像证据ID'], ['matrixGap', '矩阵空白'], ['routedAt', '路由时间'],
+    ['decision', '顾问决策'], ['rejectionReason', '拒绝原因'], ['decidedAt', '决策时间'],
+    ['status', '状态'], ['simulation', '模拟数据'],
   ]],
   '05-内容成果.csv': ['contentResults', [
     ['contentId', '内容ID'], ['taskId', '任务ID'], ['title', '标题'], ['hook', '开场'], ['script', '口播脚本'],

@@ -1,4 +1,19 @@
 import { analyzeCommentLead, applyConfirmedFeedback, inspectContentPackage } from './live-engine.mjs';
+import {
+  confirmCandidateTags,
+  createOnboardingSession as buildOnboardingSession,
+  generateRuleCandidates,
+  normalizeModelCandidates,
+  normalizeOnboardingInput,
+} from './advisor-onboarding.mjs';
+import {
+  completeQuizSession as buildCompletedQuizSession,
+  createQuizSession as buildQuizSession,
+  getQuestion,
+  mergeQuizCandidateTerms,
+  recordQuizAnswer,
+} from './advisor-quiz.mjs';
+import { decideOpportunity as buildOpportunityDecision, routeOpportunities as buildOpportunityRoutes } from './opportunity-router.mjs';
 
 function requireRecord(record, label, id) {
   if (!record) {
@@ -67,16 +82,358 @@ function modelPrompt(context) {
   return JSON.stringify(safeContext, null, 2);
 }
 
+function quizView(session) {
+  return {
+    question: session.currentQuestionId ? getQuestion(session.currentQuestionId) : null,
+    questions: session.questionIds.map((questionId) => getQuestion(questionId)),
+  };
+}
+
+function onboardingModelPrompt(input) {
+  return JSON.stringify({
+    advisor: {
+      city: input.city,
+      experienceYears: input.experienceYears,
+      targetAudience: input.targetAudience,
+      specialties: input.specialties,
+      preferences: input.preferences,
+      historyContents: input.historyContents,
+      voiceTranscript: input.voiceTranscript,
+      forbiddenExpressions: input.forbiddenExpressions,
+    },
+    rules: [
+      '只输出 JSON 对象，字段为 tags 数组',
+      '每个标签字段为 dimension,label,weight,confidence,evidence',
+      'evidence 必须引用输入中的具体文字，不得推断敏感属性',
+      '不得把车型价格、权益、参数或政策作为顾问画像证据',
+    ],
+  }, null, 2);
+}
+
 export class OneKosService {
-  constructor({ repository, llmClient = null, mode = 'simulation', clock = () => new Date() }) {
+  constructor({ repository, llmClient = null, mode = 'simulation', clock = () => new Date(), idFactory = () => `ONB-${crypto.randomUUID()}` }) {
     this.repository = repository;
     this.llmClient = llmClient;
     this.mode = mode;
     this.clock = clock;
+    this.idFactory = idFactory;
   }
 
   today() { return this.clock().toISOString().slice(0, 10); }
   timestamp() { return this.clock().toISOString(); }
+
+  async listAdvisors() {
+    return this.repository.listAdvisors();
+  }
+
+  async createAdvisorIdentity(raw = {}) {
+    const advisorId = String(raw.advisorId || '').trim().toUpperCase();
+    const displayName = String(raw.displayName || '').trim();
+    if (!advisorId || !displayName) {
+      const error = new Error('顾问ID与展示名称不能为空');
+      error.statusCode = 400;
+      throw error;
+    }
+    const existing = await this.repository.getAdvisor(advisorId);
+    if (existing) return { advisor: existing, created: false };
+    const advisor = {
+      advisorId, displayName, city: String(raw.city || '').trim(), store: String(raw.store || '').trim(),
+      experienceYears: Number(raw.experienceYears) || 0, targetAudience: String(raw.targetAudience || '').trim(),
+      profileMaturity: 0, workflowStatus: '待校准', initializationStatus: 'uninitialized', profileVersion: 0,
+      identitySource: raw.identitySource === 'feishu' ? 'feishu' : 'demo',
+      externalUserId: String(raw.externalUserId || '').trim(),
+      authorizationStatus: '待顾问确认', simulation: raw.identitySource !== 'feishu',
+    };
+    const write = await this.repository.saveAdvisor(advisor);
+    return { advisor, write, created: true };
+  }
+
+  async createOnboardingSession(rawInput) {
+    const input = normalizeOnboardingInput(rawInput);
+    const now = this.timestamp();
+    const session = {
+      ...buildOnboardingSession(input, { sessionId: this.idFactory(), now }),
+      simulation: input.identitySource !== 'feishu',
+    };
+    const advisor = {
+      advisorId: input.advisorId,
+      displayName: input.displayName,
+      city: input.city,
+      store: input.store,
+      experienceYears: input.experienceYears,
+      targetAudience: input.targetAudience,
+      profileMaturity: 0,
+      workflowStatus: '待校准',
+      initializationStatus: 'collecting',
+      profileVersion: 0,
+      identitySource: input.identitySource,
+      externalUserId: input.externalUserId,
+      authorizationStatus: input.authorizationStatus,
+      simulation: session.simulation,
+    };
+    const [advisorWrite, sessionWrite] = await Promise.all([
+      this.repository.saveAdvisor(advisor),
+      this.repository.saveOnboardingSession(session),
+    ]);
+    return { advisor, session, advisorWrite, sessionWrite };
+  }
+
+  async createQuizSession(raw = {}) {
+    const advisorId = String(raw.advisorId || '').trim().toUpperCase();
+    const identity = { displayName: raw.displayName, city: raw.city, store: raw.store };
+    const now = this.timestamp();
+    const session = {
+      ...buildQuizSession({ advisorId, identity }, { sessionId: this.idFactory(), now }),
+      simulation: raw.identitySource !== 'feishu',
+    };
+    const advisor = {
+      advisorId, ...session.identity, experienceYears: 0, targetAudience: '', profileMaturity: 0,
+      workflowStatus: '答题中', initializationStatus: 'collecting', profileVersion: 0,
+      identitySource: raw.identitySource === 'feishu' ? 'feishu' : 'demo', authorizationStatus: '仅使用顾问主动回答的问卷',
+      simulation: session.simulation,
+    };
+    const [advisorWrite, sessionWrite] = await Promise.all([
+      this.repository.saveAdvisor(advisor), this.repository.saveOnboardingSession(session),
+    ]);
+    return { advisor, session, ...quizView(session), advisorWrite, sessionWrite };
+  }
+
+  async getQuizSession(sessionId) {
+    const session = await this.getOnboardingSession(sessionId);
+    if (session.mode !== 'quiz') {
+      const error = new Error('当前初始化会话不是问卷模式');
+      error.statusCode = 409;
+      throw error;
+    }
+    return { session, ...quizView(session) };
+  }
+
+  async submitQuizAnswer(sessionId, answer) {
+    const { session } = await this.getQuizSession(sessionId);
+    const updated = recordQuizAnswer(session, answer, this.timestamp());
+    const write = await this.repository.saveOnboardingSession(updated);
+    return { session: updated, ...quizView(updated), write };
+  }
+
+  async completeQuizSession(sessionId) {
+    const { session } = await this.getQuizSession(sessionId);
+    let updated = buildCompletedQuizSession(session, { now: this.timestamp() });
+    const warnings = [];
+    if (this.llmClient) {
+      try {
+        const raw = await this.llmClient.generateJson({
+          system: '你是 OneKOS 顾问表达分析器。仅依据短文回答提炼可验证的表达词，只返回 JSON 对象，字段为 terms 数组。',
+          user: JSON.stringify({ writingAnswer: session.answers['Q-WRITING'], allowedDimensions: ['表达结构', '表达语气', '证据偏好', '内容形式'] }),
+          temperature: 0.1,
+        });
+        const merged = mergeQuizCandidateTerms(updated.candidates, raw, session.advisorId);
+        if (merged.length > updated.candidates.length) {
+          updated.candidates = merged;
+          updated.generator = 'quiz-hybrid';
+        }
+      } catch {
+        warnings.push('短文模型分析不可用，已使用本地规则完成词云。');
+      }
+    }
+    const byDimension = (dimension) => updated.candidates.filter((item) => item.dimension === dimension).sort((a, b) => b.weight - a.weight);
+    const input = {
+      advisorId: session.advisorId, displayName: session.identity.displayName, city: session.identity.city, store: session.identity.store,
+      experienceYears: 0, targetAudience: byDimension('目标用户')[0]?.term || '待持续学习', targetModel: '乐道 L60',
+      specialties: byDimension('专业能力').slice(0, 3).map((item) => item.term),
+      preferences: {
+        openingStyle: byDimension('表达结构')[0]?.term || '自然表达',
+        evidencePreference: byDimension('证据偏好')[0]?.term || '真实证据',
+        tone: byDimension('表达语气')[0]?.term || '专业克制',
+      },
+      historyContents: [], voiceTranscript: session.answers['Q-WRITING'] || '', forbiddenExpressions: [],
+      identitySource: session.simulation ? 'demo' : 'feishu', externalUserId: '', authorizationStatus: '仅使用顾问主动回答的问卷',
+    };
+    updated = { ...updated, input, warnings: [...(updated.warnings || []), ...warnings] };
+    const write = await this.repository.saveOnboardingSession(updated);
+    return { session: updated, write };
+  }
+
+  async getOnboardingSession(sessionId) {
+    return requireRecord(await this.repository.getOnboardingSession(sessionId), '初始化会话', sessionId);
+  }
+
+  async generateOnboardingCandidates(sessionId) {
+    const session = await this.getOnboardingSession(sessionId);
+    if (['generated', 'confirming', 'confirmed'].includes(session.status)) return { session };
+    if (!['draft', 'generation_failed'].includes(session.status)) {
+      const error = new Error(`当前会话状态不能生成候选画像：${session.status}`);
+      error.statusCode = 409;
+      throw error;
+    }
+
+    let candidates;
+    let generator = 'local-rule-fallback';
+    const warnings = [];
+    if (this.llmClient) {
+      try {
+        const raw = await this.llmClient.generateJson({
+          system: '你是 OneKOS 顾问画像初始化分析器。只依据顾问主动提供的资料生成候选标签，只返回 JSON。',
+          user: onboardingModelPrompt(session.input),
+          temperature: 0.15,
+        });
+        candidates = normalizeModelCandidates(raw, session.input);
+        generator = 'external-llm';
+      } catch {
+        warnings.push('模型候选不可用，已使用本地规则生成可确认画像。');
+      }
+    }
+    if (!candidates) candidates = generateRuleCandidates(session.input);
+
+    const updated = {
+      ...session,
+      status: 'generated',
+      candidates,
+      generator,
+      warnings,
+      lastError: null,
+      updatedAt: this.timestamp(),
+    };
+    const write = await this.repository.saveOnboardingSession(updated);
+    return { session: updated, write };
+  }
+
+  async confirmOnboardingSession(sessionId, { acceptedTags = [], idempotencyKey = '' } = {}) {
+    const session = await this.getOnboardingSession(sessionId);
+    if (session.status === 'confirmed') {
+      const [advisor, tags, task] = await Promise.all([
+        this.repository.getAdvisor(session.advisorId),
+        this.repository.getProfileTags(session.advisorId),
+        this.repository.getTask(session.taskId),
+      ]);
+      return { advisor, tags: tags.filter((tag) => tag.profileVersion === session.profileVersion), task, session, idempotent: true };
+    }
+    if (!['generated', 'write_failed'].includes(session.status)) {
+      const error = new Error('当前初始化会话尚未生成候选画像');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const now = this.timestamp();
+    const result = confirmCandidateTags({ ...session, status: 'generated' }, acceptedTags, now);
+    let working = {
+      ...session,
+      status: 'confirming',
+      acceptedTags: result.tags,
+      idempotencyKey: String(idempotencyKey || ''),
+      lastError: null,
+      updatedAt: now,
+      writeProgress: { ...(session.writeProgress || {}) },
+    };
+    await this.repository.saveOnboardingSession(working);
+
+    const advisor = {
+      ...session.input,
+      profileMaturity: Math.min(80, 56 + result.tags.length * 6),
+      workflowStatus: '已校准',
+      initializationStatus: 'active',
+      profileVersion: result.profileVersion,
+      initializedAt: now,
+      simulation: session.simulation,
+    };
+    const tags = result.tags.map((tag) => ({ ...tag, sourceRefs: [sessionId], simulation: session.simulation }));
+
+    try {
+      if (!working.writeProgress.advisor) {
+        await this.repository.saveAdvisor(advisor);
+        working.writeProgress.advisor = true;
+        await this.repository.saveOnboardingSession(working);
+      }
+      const writtenTags = new Set(working.writeProgress.tags || []);
+      for (const tag of tags) {
+        if (!writtenTags.has(tag.tagId)) {
+          await this.repository.saveProfileTag(tag);
+          writtenTags.add(tag.tagId);
+          working.writeProgress.tags = [...writtenTags];
+          await this.repository.saveOnboardingSession(working);
+        }
+      }
+      if (!working.writeProgress.task) {
+        await this.repository.saveContentTask(result.task);
+        working.writeProgress.task = true;
+      }
+      working = {
+        ...working,
+        status: 'confirmed',
+        profileVersion: result.profileVersion,
+        taskId: result.task.taskId,
+        confirmedAt: now,
+        updatedAt: now,
+      };
+      await this.repository.saveOnboardingSession(working);
+      return { advisor, tags, task: result.task, session: working, idempotent: false };
+    } catch {
+      const failed = { ...working, status: 'write_failed', lastError: '初始化写入未完成，可安全重试。', updatedAt: this.timestamp() };
+      await this.repository.saveOnboardingSession(failed);
+      const error = new Error(failed.lastError);
+      error.statusCode = 502;
+      throw error;
+    }
+  }
+
+  async getOpportunities({ advisorId, limit = 3 } = {}) {
+    const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
+    const [tasks, profileTags, leads, contentResults] = await Promise.all([
+      this.repository.listContentTasks(advisorId),
+      this.repository.getProfileTags(advisorId),
+      this.repository.listCommentLeads(advisorId),
+      this.repository.listContentResults(),
+    ]);
+    return {
+      advisor,
+      ...buildOpportunityRoutes({ advisorId, tasks, profileTags, leads, contentResults, limit }),
+      generatedAt: this.timestamp(),
+      dataSource: this.mode === 'simulation' ? 'repository-simulation' : 'feishu-bitable',
+    };
+  }
+
+  async routeOpportunities({ advisorId, limit = 3 } = {}) {
+    const result = await this.getOpportunities({ advisorId, limit });
+    await Promise.all(result.recommendations.map((recommendation) => this.repository.saveContentTask({
+      ...recommendation,
+      profileEvidence: recommendation.matchedProfileTagIds,
+      routeScore: recommendation.score,
+      routedAt: result.generatedAt,
+    })));
+    return result;
+  }
+
+  async decideOpportunity(taskId, { advisorId, decision, reason = '' } = {}) {
+    const task = requireRecord(await this.repository.getTask(taskId), '机会任务', taskId);
+    if (task.advisorId !== advisorId) {
+      const error = new Error(`任务 ${taskId} 不属于顾问 ${advisorId}`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const tags = await this.repository.getProfileTags(advisorId);
+    const affectedTag = (task.profileEvidence || []).map((tagId) => tags.find((tag) => tag.tagId === tagId)).find(Boolean)
+      || [...tags].sort((left, right) => Number(right.weight || 0) - Number(left.weight || 0))[0];
+    let result;
+    try {
+      result = buildOpportunityDecision(task, {
+        decision,
+        reason,
+        affectedTagId: affectedTag?.tagId || null,
+        eventId: `EVENT-OPPORTUNITY-${taskId}`,
+        now: this.timestamp(),
+      });
+    } catch (error) {
+      error.statusCode = 400;
+      throw error;
+    }
+    const taskWrite = await this.repository.saveContentTask(result.task);
+    let eventWrite = null;
+    if (result.feedbackEvent) eventWrite = await this.repository.saveFeedbackEvent(result.feedbackEvent);
+    if (decision === 'accept') {
+      const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
+      await this.repository.saveAdvisor({ ...advisor, workflowStatus: '待生成' });
+    }
+    return { ...result, taskWrite, eventWrite };
+  }
 
   async getAdvisorContext({ advisorId = 'ADV-017', taskId = 'TASK-001' } = {}) {
     const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
@@ -107,6 +464,11 @@ export class OneKosService {
 
   async generateContent({ advisorId = 'ADV-017', taskId = 'TASK-001', contentId = 'CONTENT-DEMO-001' } = {}) {
     const context = await this.getAdvisorContext({ advisorId, taskId });
+    if (context.task.status !== '待生成') {
+      const error = new Error(`任务 ${taskId} 尚未被顾问接受，不能生成内容`);
+      error.statusCode = 409;
+      throw error;
+    }
     let candidate;
     let generator = 'local-deterministic';
     if (this.llmClient) {

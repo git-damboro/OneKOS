@@ -69,3 +69,119 @@ test('非法 JSON、未知 API 与业务错误返回统一结构', async () => {
     assert.equal((await unknownResponse.json()).error.code, 'API_NOT_FOUND');
   });
 });
+
+test('顾问与初始化 API 完整路由到服务并传递确认幂等键', async () => {
+  const calls = [];
+  const service = {
+    async listAdvisors() { calls.push(['list']); return [{ advisorId: 'ADV-017' }]; },
+    async createAdvisorIdentity(body) { calls.push(['advisor', body]); return { advisor: { advisorId: body.advisorId } }; },
+    async createOnboardingSession(body) { calls.push(['session', body]); return { session: { sessionId: 'ONB/001' } }; },
+    async getOnboardingSession(sessionId) { calls.push(['get', sessionId]); return { sessionId, status: 'draft' }; },
+    async generateOnboardingCandidates(sessionId) { calls.push(['generate', sessionId]); return { session: { sessionId, status: 'generated' } }; },
+    async confirmOnboardingSession(sessionId, body) { calls.push(['confirm', sessionId, body]); return { task: { taskId: 'TASK-NEW-001' } }; },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const advisors = await fetch(`${baseUrl}/api/advisors`).then((response) => response.json());
+    assert.equal(advisors.data[0].advisorId, 'ADV-017');
+
+    const createdAdvisor = await jsonPost(`${baseUrl}/api/advisors`, { advisorId: 'ADV-NEW-001', displayName: '顾问小林' }).then((response) => response.json());
+    assert.equal(createdAdvisor.data.advisor.advisorId, 'ADV-NEW-001');
+
+    const createdSession = await jsonPost(`${baseUrl}/api/onboarding/sessions`, { advisorId: 'ADV-NEW-001' }).then((response) => response.json());
+    assert.equal(createdSession.data.session.sessionId, 'ONB/001');
+
+    const restored = await fetch(`${baseUrl}/api/onboarding/sessions/${encodeURIComponent('ONB/001')}`).then((response) => response.json());
+    assert.equal(restored.data.sessionId, 'ONB/001');
+
+    const generated = await jsonPost(`${baseUrl}/api/onboarding/sessions/${encodeURIComponent('ONB/001')}/generate`, {}).then((response) => response.json());
+    assert.equal(generated.data.session.status, 'generated');
+
+    const confirmResponse = await fetch(`${baseUrl}/api/onboarding/sessions/${encodeURIComponent('ONB/001')}/confirm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'CONFIRM-001' },
+      body: JSON.stringify({ acceptedTags: [{ tagId: 'TAG-001' }] }),
+    });
+    const confirmed = await confirmResponse.json();
+    assert.equal(confirmed.data.task.taskId, 'TASK-NEW-001');
+  });
+
+  assert.deepEqual(calls.map((item) => item[0]), ['list', 'advisor', 'session', 'get', 'generate', 'confirm']);
+  assert.deepEqual(calls.at(-1), ['confirm', 'ONB/001', {
+    acceptedTags: [{ tagId: 'TAG-001' }],
+    idempotencyKey: 'CONFIRM-001',
+  }]);
+});
+
+test('不存在的初始化会话保持统一 404 错误结构', async () => {
+  const service = {
+    async getOnboardingSession() {
+      const error = new Error('初始化会话不存在：ONB-MISSING');
+      error.statusCode = 404;
+      throw error;
+    },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/onboarding/sessions/ONB-MISSING`);
+    const payload = await response.json();
+    assert.equal(response.status, 404);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error.message, /初始化会话不存在/);
+    assert.ok(payload.error.requestId);
+  });
+});
+
+test('问卷初始化 API 支持创建、恢复、逐题提交、完成和确认', async () => {
+  const calls = [];
+  const service = {
+    async createQuizSession(body) { calls.push(['create', body]); return { session: { sessionId: 'QUIZ/001' } }; },
+    async getQuizSession(id) { calls.push(['get', id]); return { session: { sessionId: id, status: 'quiz_active' } }; },
+    async submitQuizAnswer(id, body) { calls.push(['answer', id, body]); return { session: { sessionId: id, currentQuestionId: 'Q-2' } }; },
+    async completeQuizSession(id) { calls.push(['complete', id]); return { session: { sessionId: id, status: 'generated', candidates: [] } }; },
+    async confirmOnboardingSession(id, body) { calls.push(['confirm', id, body]); return { task: { taskId: 'TASK-QUIZ-001' } }; },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const created = await jsonPost(`${baseUrl}/api/onboarding/quiz-sessions`, { advisorId: 'ADV-QUIZ-001' }).then((response) => response.json());
+    assert.equal(created.data.session.sessionId, 'QUIZ/001');
+    const path = `${baseUrl}/api/onboarding/quiz-sessions/${encodeURIComponent('QUIZ/001')}`;
+    assert.equal((await fetch(path).then((response) => response.json())).data.session.status, 'quiz_active');
+    assert.equal((await jsonPost(`${path}/answers`, { questionId: 'Q-1', value: 'A' }).then((response) => response.json())).data.session.currentQuestionId, 'Q-2');
+    assert.equal((await jsonPost(`${path}/complete`, {}).then((response) => response.json())).data.session.status, 'generated');
+    const confirmed = await fetch(`${path}/confirm`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'QUIZ-CONFIRM-001' },
+      body: JSON.stringify({ acceptedTags: [{ tagId: 'TERM-001' }] }),
+    }).then((response) => response.json());
+    assert.equal(confirmed.data.task.taskId, 'TASK-QUIZ-001');
+  });
+
+  assert.deepEqual(calls.map((item) => item[0]), ['create', 'get', 'answer', 'complete', 'confirm']);
+  assert.equal(calls.at(-1)[2].idempotencyKey, 'QUIZ-CONFIRM-001');
+});
+
+test('机会雷达 API 支持读取、重新路由和接受拒绝决策', async () => {
+  const calls = [];
+  const service = {
+    async getOpportunities(input) { calls.push(['get', input]); return { recommendations: [{ taskId: 'TASK-001' }] }; },
+    async routeOpportunities(input) { calls.push(['route', input]); return { recommendations: [{ taskId: 'TASK-002' }] }; },
+    async decideOpportunity(taskId, input) { calls.push(['decision', taskId, input]); return { task: { taskId, status: '已拒绝' } }; },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const listed = await fetch(`${baseUrl}/api/opportunities?advisorId=ADV-017&limit=2`).then((response) => response.json());
+    assert.equal(listed.data.recommendations[0].taskId, 'TASK-001');
+    const routed = await jsonPost(`${baseUrl}/api/opportunities/route`, { advisorId: 'ADV-017', limit: 3 }).then((response) => response.json());
+    assert.equal(routed.data.recommendations[0].taskId, 'TASK-002');
+    const decided = await jsonPost(`${baseUrl}/api/opportunities/${encodeURIComponent('TASK/002')}/decision`, {
+      advisorId: 'ADV-017', decision: 'reject', reason: '缺少素材',
+    }).then((response) => response.json());
+    assert.equal(decided.data.task.status, '已拒绝');
+  });
+
+  assert.deepEqual(calls, [
+    ['get', { advisorId: 'ADV-017', limit: 2 }],
+    ['route', { advisorId: 'ADV-017', limit: 3 }],
+    ['decision', 'TASK/002', { advisorId: 'ADV-017', decision: 'reject', reason: '缺少素材' }],
+  ]);
+});
