@@ -12,6 +12,17 @@ npm start
 
 打开 `http://127.0.0.1:4173/`。首次不配置任何密钥也可运行完整模拟演示。
 
+## Zeabur 部署
+
+当前项目可直接作为 Node 服务从 GitHub 的 `main` 分支部署到 Zeabur：
+
+1. 在 Zeabur 新建项目，选择“部署服务”并连接 GitHub 仓库 `git-damboro/OneKOS`，分支选择 `main`。
+2. 服务类型选择 Node.js；构建命令填写 `npm install`，启动命令填写 `npm start`。
+3. 在服务的网络设置中生成公网域名；部署完成后访问 `https://你的域名/api/health`，返回 `ok: true` 即表示服务可用。
+4. 在 Zeabur 的环境变量中按需填写 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_BASE_APP_TOKEN`、`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`。`PORT` 由平台注入，无需手动填写。
+
+未配置飞书和模型变量时，线上服务会以 `simulation` 模式运行。真实飞书密钥只应填写在 Zeabur 环境变量中，不能提交到 Git。
+
 ## 三种运行模式
 
 | 模式 | 飞书 Base | 内容生成 | 页面标识 |

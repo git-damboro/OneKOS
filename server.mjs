@@ -66,8 +66,8 @@ if (entryPath === fileURLToPath(import.meta.url)) {
   const runtime = createOneKosRuntime();
   const server = createAppServer({ service: runtime.service, runtimeStatus: runtime.runtimeStatus });
   const port = runtime.config.port;
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`OneKOS MVP running at http://127.0.0.1:${port}`);
+  server.listen(port, process.env.HOST || '0.0.0.0', () => {
+    console.log(`OneKOS MVP running on port ${port}`);
     console.log(`Runtime mode: ${runtime.runtimeStatus.mode}`);
     for (const warning of runtime.runtimeStatus.warnings) console.log(`Warning: ${warning}`);
   });

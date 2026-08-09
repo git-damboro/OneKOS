@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createAppServer } from '../server.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 async function withServer(run) {
   const server = createAppServer();
@@ -31,4 +36,10 @@ test('服务器可返回业务模块并拒绝目录穿越', async () => {
     const unsafeResponse = await fetch(`${baseUrl}/..%2Fpackage.json`);
     assert.equal(unsafeResponse.status, 403);
   });
+});
+
+test('生产入口默认监听云平台可访问的网络接口', async () => {
+  const source = await readFile(path.join(root, 'server.mjs'), 'utf8');
+
+  assert.match(source, /server\.listen\(port, process\.env\.HOST \|\| '0\.0\.0\.0'/);
 });
