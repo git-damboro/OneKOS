@@ -82,6 +82,100 @@ export function createApiHandler({ service, runtimeStatus }) {
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }
+      if (request.method === 'GET' && url.pathname === '/api/advisors') {
+        const data = await service.listAdvisors();
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/advisors') {
+        const data = await service.createAdvisorIdentity(await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/onboarding/quiz-sessions') {
+        const data = await service.createQuizSession(await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizAnswerMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)\/answers$/);
+      if (quizAnswerMatch) {
+        const data = await service.submitQuizAnswer(decodeURIComponent(quizAnswerMatch[1]), await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizCompleteMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)\/complete$/);
+      if (quizCompleteMatch) {
+        await readJsonBody(request);
+        const data = await service.completeQuizSession(decodeURIComponent(quizCompleteMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizConfirmMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)\/confirm$/);
+      if (quizConfirmMatch) {
+        const body = await readJsonBody(request);
+        const data = await service.confirmOnboardingSession(decodeURIComponent(quizConfirmMatch[1]), {
+          acceptedTags: body.acceptedTags || [], idempotencyKey: request.headers['idempotency-key'] || body.idempotencyKey || '',
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizSessionMatch = request.method === 'GET' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)$/);
+      if (quizSessionMatch) {
+        const data = await service.getQuizSession(decodeURIComponent(quizSessionMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/onboarding/sessions') {
+        const data = await service.createOnboardingSession(await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const onboardingGenerateMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/sessions\/([^/]+)\/generate$/);
+      if (onboardingGenerateMatch) {
+        await readJsonBody(request);
+        const data = await service.generateOnboardingCandidates(decodeURIComponent(onboardingGenerateMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const onboardingConfirmMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/sessions\/([^/]+)\/confirm$/);
+      if (onboardingConfirmMatch) {
+        const body = await readJsonBody(request);
+        const data = await service.confirmOnboardingSession(decodeURIComponent(onboardingConfirmMatch[1]), {
+          acceptedTags: body.acceptedTags || [],
+          idempotencyKey: request.headers['idempotency-key'] || body.idempotencyKey || '',
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const onboardingSessionMatch = request.method === 'GET' && url.pathname.match(/^\/api\/onboarding\/sessions\/([^/]+)$/);
+      if (onboardingSessionMatch) {
+        const data = await service.getOnboardingSession(decodeURIComponent(onboardingSessionMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/opportunities') {
+        const data = await service.getOpportunities({
+          advisorId: url.searchParams.get('advisorId') || 'ADV-017',
+          limit: Number(url.searchParams.get('limit')) || 3,
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/opportunities/route') {
+        const body = await readJsonBody(request);
+        const data = await service.routeOpportunities({ advisorId: body.advisorId || 'ADV-017', limit: Number(body.limit) || 3 });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const opportunityDecisionMatch = request.method === 'POST' && url.pathname.match(/^\/api\/opportunities\/([^/]+)\/decision$/);
+      if (opportunityDecisionMatch) {
+        const body = await readJsonBody(request);
+        const data = await service.decideOpportunity(decodeURIComponent(opportunityDecisionMatch[1]), {
+          advisorId: body.advisorId || 'ADV-017', decision: body.decision, reason: body.reason || '',
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
       if (request.method === 'POST' && url.pathname === '/api/content/generate') {
         const data = await service.generateContent(await readJsonBody(request));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);

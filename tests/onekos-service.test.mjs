@@ -13,9 +13,100 @@ function createService(options = {}) {
       mode: options.mode || 'simulation',
       llmClient: options.llmClient || null,
       clock: () => new Date('2026-08-04T02:00:00.000Z'),
+      idFactory: options.idFactory || (() => 'ONB-TEST-001'),
     }),
   };
 }
+
+const onboardingInput = {
+  advisorId: 'ADV-NEW-001', displayName: '顾问小林', city: '成都', store: '成都模拟门店',
+  experienceYears: 3, targetAudience: '城市通勤家庭', specialties: ['补能路线'], targetModel: '乐道 L60',
+  preferences: { openingStyle: '先结论后解释', evidencePreference: '实车场景证明', tone: '专业克制' },
+  historyContents: ['我会先跑一遍成都晚高峰补能路线。'],
+  identitySource: 'demo',
+};
+
+test('创建初始化会话并保存处于采集状态的顾问', async () => {
+  const { service, repository } = createService();
+  const result = await service.createOnboardingSession(onboardingInput);
+
+  assert.equal(result.session.sessionId, 'ONB-TEST-001');
+  assert.equal(result.session.status, 'draft');
+  assert.equal(result.advisor.initializationStatus, 'collecting');
+  assert.equal((await service.getOnboardingSession('ONB-TEST-001')).advisorId, 'ADV-NEW-001');
+  assert.equal(repository.snapshot().advisors.filter((item) => item.advisorId === 'ADV-NEW-001').length, 1);
+});
+
+test('未配置模型时使用规则候选并保存 generated 会话', async () => {
+  const { service } = createService();
+  await service.createOnboardingSession(onboardingInput);
+  const result = await service.generateOnboardingCandidates('ONB-TEST-001');
+
+  assert.equal(result.session.status, 'generated');
+  assert.equal(result.session.generator, 'local-rule-fallback');
+  assert.ok(result.session.candidates.length >= 6);
+});
+
+test('模型候选通过证据校验时使用 external-llm', async () => {
+  const llmClient = {
+    async generateJson() {
+      return { tags: [{
+        dimension: '表达结构', label: '先结论后解释', weight: 84, confidence: 91,
+        evidence: '顾问偏好选择先结论后解释',
+      }] };
+    },
+  };
+  const { service } = createService({ llmClient });
+  await service.createOnboardingSession(onboardingInput);
+  const result = await service.generateOnboardingCandidates('ONB-TEST-001');
+
+  assert.equal(result.session.generator, 'external-llm');
+  assert.equal(result.session.candidates.length, 1);
+});
+
+test('模型异常或无证据候选自动降级且不泄露异常详情', async () => {
+  const llmClient = { async generateJson() { throw new Error('request failed: secret-key-value'); } };
+  const { service } = createService({ llmClient });
+  await service.createOnboardingSession(onboardingInput);
+  const result = await service.generateOnboardingCandidates('ONB-TEST-001');
+
+  assert.equal(result.session.generator, 'local-rule-fallback');
+  assert.match(result.session.warnings[0], /规则/);
+  assert.doesNotMatch(result.session.warnings[0], /secret-key-value/);
+});
+
+test('确认候选后写入画像 V1 与首条任务，重复确认不创建重复记录', async () => {
+  const { service, repository } = createService();
+  await service.createOnboardingSession(onboardingInput);
+  const generated = await service.generateOnboardingCandidates('ONB-TEST-001');
+  const acceptedTags = generated.session.candidates.slice(0, 3).map((tag) => ({
+    tagId: tag.tagId, label: tag.label, weight: tag.weight, locked: false,
+  }));
+
+  const first = await service.confirmOnboardingSession('ONB-TEST-001', { acceptedTags, idempotencyKey: 'CONFIRM-001' });
+  const second = await service.confirmOnboardingSession('ONB-TEST-001', { acceptedTags, idempotencyKey: 'CONFIRM-001' });
+
+  assert.equal(first.advisor.profileVersion, 1);
+  assert.equal(first.advisor.initializationStatus, 'active');
+  assert.equal(first.tags.length, 3);
+  assert.equal(first.task.status, '待生成');
+  assert.equal(second.task.taskId, first.task.taskId);
+  const snapshot = repository.snapshot();
+  assert.equal(snapshot.advisors.filter((item) => item.advisorId === 'ADV-NEW-001').length, 1);
+  assert.equal(snapshot.profileTags.filter((item) => item.advisorId === 'ADV-NEW-001').length, 3);
+  assert.equal(snapshot.contentTasks.filter((item) => item.taskId === first.task.taskId).length, 1);
+  assert.equal(snapshot.onboardingSessions.find((item) => item.sessionId === 'ONB-TEST-001').status, 'confirmed');
+});
+
+test('候选生成前确认会话返回 409', async () => {
+  const { service } = createService();
+  await service.createOnboardingSession(onboardingInput);
+
+  await assert.rejects(
+    service.confirmOnboardingSession('ONB-TEST-001', { acceptedTags: [] }),
+    (error) => error.statusCode === 409 && /尚未生成/.test(error.message),
+  );
+});
 
 test('读取 ADV-017 画像、TASK-001 与有效品牌知识', async () => {
   const { service } = createService();

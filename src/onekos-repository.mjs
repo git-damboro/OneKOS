@@ -32,6 +32,7 @@ const SIMULATION_DATA = {
   }],
   commentLeads: [],
   feedbackEvents: [],
+  onboardingSessions: [],
 };
 
 export class SimulationOneKosRepository {
@@ -41,12 +42,16 @@ export class SimulationOneKosRepository {
   }
 
   snapshot() { return clone(this.data); }
+  async listAdvisors() { return clone(this.data.advisors); }
   async getAdvisor(advisorId) { return clone(this.data.advisors.find((item) => item.advisorId === advisorId) || null); }
   async getProfileTags(advisorId) { return clone(this.data.profileTags.filter((item) => item.advisorId === advisorId)); }
   async getTask(taskId) { return clone(this.data.contentTasks.find((item) => item.taskId === taskId) || null); }
+  async listContentTasks(advisorId) { return clone(this.data.contentTasks.filter((item) => !advisorId || item.advisorId === advisorId)); }
+  async listCommentLeads(advisorId) { return clone(this.data.commentLeads.filter((item) => !advisorId || item.advisorId === advisorId)); }
   async getValidKnowledge(model, today) { return clone(this.data.brandKnowledge.filter((item) => item.model === model && item.status === '有效' && (!item.validUntil || item.validUntil >= today))); }
   async listContentResults() { return clone(this.data.contentResults); }
   async getFeedbackEvent(eventId) { return clone(this.data.feedbackEvents.find((item) => item.eventId === eventId) || null); }
+  async getOnboardingSession(sessionId) { return clone(this.data.onboardingSessions.find((item) => item.sessionId === sessionId) || null); }
 
   async upsert(collection, key, value, record) {
     const index = this.data[collection].findIndex((item) => item[key] === value);
@@ -63,6 +68,9 @@ export class SimulationOneKosRepository {
   saveCommentLead(lead) { return this.upsert('commentLeads', 'leadId', lead.leadId, lead); }
   saveFeedbackEvent(event) { return this.upsert('feedbackEvents', 'eventId', event.eventId, event); }
   saveProfileTag(tag) { return this.upsert('profileTags', 'tagId', tag.tagId, tag); }
+  saveAdvisor(advisor) { return this.upsert('advisors', 'advisorId', advisor.advisorId, advisor); }
+  saveOnboardingSession(session) { return this.upsert('onboardingSessions', 'sessionId', session.sessionId, session); }
+  saveContentTask(task) { return this.upsert('contentTasks', 'taskId', task.taskId, task); }
 }
 
 function yes(value) { return value === true || value === '是'; }
@@ -71,6 +79,55 @@ function split(value) {
   return value ? String(value).split(/[｜|\n]/).map((item) => item.trim()).filter(Boolean) : [];
 }
 function lines(value) { return Array.isArray(value) ? value.join('\n') : value || ''; }
+function json(value) { return JSON.stringify(value ?? null); }
+function parseJson(value, fallback) {
+  if (!value) return clone(fallback);
+  try { return JSON.parse(value); } catch { return clone(fallback); }
+}
+
+function mapAdvisor(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id,
+    advisorId: f.顾问ID,
+    displayName: f.展示名称,
+    city: f.城市,
+    store: f.门店,
+    experienceYears: f.从业年限,
+    targetAudience: f.目标用户,
+    profileMaturity: f.画像成熟度,
+    workflowStatus: f.流程状态,
+    initializationStatus: f.初始化状态,
+    profileVersion: f.当前画像版本,
+    identitySource: f.身份来源,
+    externalUserId: f.外部用户标识,
+    authorizationStatus: f.授权状态,
+    initializedAt: f.首次初始化时间,
+    simulation: yes(f.模拟数据),
+  };
+}
+
+function mapContentTask(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id, taskId: f.任务ID, advisorId: f.顾问ID, targetModel: f.目标车型,
+    userQuestion: f.用户问题, topic: f.内容角度, routeScore: f.路由匹配分, matrixGap: f.矩阵空白,
+    profileEvidence: split(f.画像证据ID), taskDate: f.任务日期, status: f.状态,
+    routedAt: f.路由时间 || '', decision: f.顾问决策 || '', rejectionReason: f.拒绝原因 || '', decidedAt: f.决策时间 || '', simulation: yes(f.模拟数据),
+  };
+}
+
+function mapCommentLead(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id, leadId: f.线索ID, commentId: f.评论ID, advisorId: f.顾问ID,
+    contentId: f.内容ID, platform: f.平台, originalComment: f.原评论, city: f.城市,
+    familyStructure: f.家庭结构, model: f.车型, purchaseWindow: f.购车时间,
+    testDriveIntent: f.试驾意愿, score: f.线索分, grade: f.线索等级, status: f.状态,
+    nextAction: f.下一步建议, fieldEvidence: parseJson(f.字段证据, {}), updatedAt: f.最后同步时间,
+    simulation: yes(f.模拟数据),
+  };
+}
 
 export class FeishuOneKosRepository {
   constructor({ client, tableIds }) {
@@ -85,23 +142,36 @@ export class FeishuOneKosRepository {
   async getAdvisor(advisorId) {
     const record = await this.find('advisors', '顾问ID', advisorId);
     if (!record) return null;
-    const f = record.fields;
-    return { recordId: record.record_id, advisorId: f.顾问ID, displayName: f.展示名称, city: f.城市, store: f.门店, experienceYears: f.从业年限, targetAudience: f.目标用户, profileMaturity: f.画像成熟度, workflowStatus: f.流程状态, authorizationStatus: f.授权状态, simulation: yes(f.模拟数据) };
+    return mapAdvisor(record);
+  }
+
+  async listAdvisors() {
+    const records = await this.client.listRecords(this.tableIds.advisors);
+    return records.filter((record) => record.fields.顾问ID).map(mapAdvisor);
   }
 
   async getProfileTags(advisorId) {
     const records = await this.client.listRecords(this.tableIds.profileTags);
     return records.filter((record) => record.fields.顾问ID === advisorId && record.fields.标签ID).map((record) => {
       const f = record.fields;
-      return { recordId: record.record_id, tagId: f.标签ID, advisorId: f.顾问ID, dimension: f.维度, label: f.标签, status: f.状态, confidence: f.置信度, weight: f.权重, source: f.来源, evidence: f.证据, updatedAt: f.更新时间, simulation: yes(f.模拟数据) };
+      return { recordId: record.record_id, tagId: f.标签ID, advisorId: f.顾问ID, profileVersion: f.画像版本, dimension: f.维度, label: f.标签, status: f.状态, confidence: f.置信度, weight: f.权重, source: f.来源, sourceRefs: split(f.来源引用), evidence: f.证据, updatedAt: f.更新时间, simulation: yes(f.模拟数据) };
     });
   }
 
   async getTask(taskId) {
     const record = await this.find('contentTasks', '任务ID', taskId);
     if (!record) return null;
-    const f = record.fields;
-    return { recordId: record.record_id, taskId: f.任务ID, advisorId: f.顾问ID, targetModel: f.目标车型, userQuestion: f.用户问题, topic: f.内容角度, routeScore: f.路由匹配分, matrixGap: f.矩阵空白, profileEvidence: split(f.画像证据ID), taskDate: f.任务日期, status: f.状态, simulation: yes(f.模拟数据) };
+    return mapContentTask(record);
+  }
+
+  async listContentTasks(advisorId) {
+    const records = await this.client.listRecords(this.tableIds.contentTasks);
+    return records.filter((record) => record.fields.任务ID && (!advisorId || record.fields.顾问ID === advisorId)).map(mapContentTask);
+  }
+
+  async listCommentLeads(advisorId) {
+    const records = await this.client.listRecords(this.tableIds.commentLeads);
+    return records.filter((record) => record.fields.线索ID && (!advisorId || record.fields.顾问ID === advisorId)).map(mapCommentLead);
   }
 
   async getValidKnowledge(model, today) {
@@ -128,6 +198,69 @@ export class FeishuOneKosRepository {
     if (!record) return null;
     const f = record.fields;
     return { recordId: record.record_id, eventId: f.事件ID, advisorId: f.顾问ID, sourceRecordId: f.来源记录ID, eventType: f.事件类型, affectedTagId: f.影响标签ID, weightDelta: f.权重变化, evidence: f.证据, createdAt: f.创建时间, status: f.状态, simulation: yes(f.模拟数据) };
+  }
+
+  async getOnboardingSession(sessionId) {
+    const record = await this.find('onboardingSessions', '会话ID', sessionId);
+    if (!record) return null;
+    const f = record.fields;
+    return {
+      recordId: record.record_id,
+      sessionId: f.会话ID,
+      advisorId: f.顾问ID,
+      status: f.状态,
+      input: parseJson(f.输入快照, {}),
+      candidates: parseJson(f.候选标签, []),
+      acceptedTags: parseJson(f.确认标签, []),
+      writeProgress: parseJson(f.写入进度, {}),
+      generator: f.生成方式 || null,
+      warnings: parseJson(f.警告, []),
+      lastError: f.最近错误 || null,
+      createdAt: f.创建时间,
+      updatedAt: f.更新时间,
+      confirmedAt: f.确认时间 || null,
+      profileVersion: f.画像版本 || null,
+      taskId: f.首条任务ID || null,
+      simulation: yes(f.模拟数据),
+    };
+  }
+
+  async saveAdvisor(advisor) {
+    const fields = {
+      顾问ID: advisor.advisorId, 展示名称: advisor.displayName, 城市: advisor.city, 门店: advisor.store,
+      从业年限: advisor.experienceYears, 目标用户: advisor.targetAudience, 画像成熟度: advisor.profileMaturity,
+      流程状态: advisor.workflowStatus, 初始化状态: advisor.initializationStatus,
+      当前画像版本: advisor.profileVersion, 身份来源: advisor.identitySource,
+      外部用户标识: advisor.externalUserId || '', 授权状态: advisor.authorizationStatus,
+      首次初始化时间: advisor.initializedAt || '', 模拟数据: advisor.simulation ? '是' : '否',
+    };
+    const result = await this.client.upsertByField(this.tableIds.advisors, '顾问ID', advisor.advisorId, fields);
+    return { action: result.action, recordId: result.record?.record_id, record: result.record };
+  }
+
+  async saveOnboardingSession(session) {
+    const fields = {
+      会话ID: session.sessionId, 顾问ID: session.advisorId, 状态: session.status,
+      输入快照: json(session.input), 候选标签: json(session.candidates || []), 确认标签: json(session.acceptedTags || []),
+      写入进度: json(session.writeProgress || {}), 生成方式: session.generator || '',
+      警告: json(session.warnings || []), 最近错误: session.lastError || '',
+      创建时间: session.createdAt || '', 更新时间: session.updatedAt || '', 确认时间: session.confirmedAt || '',
+      画像版本: session.profileVersion || '', 首条任务ID: session.taskId || '',
+      模拟数据: session.simulation ? '是' : '否',
+    };
+    const result = await this.client.upsertByField(this.tableIds.onboardingSessions, '会话ID', session.sessionId, fields);
+    return { action: result.action, recordId: result.record?.record_id, record: result.record };
+  }
+
+  async saveContentTask(task) {
+    const fields = {
+      任务ID: task.taskId, 顾问ID: task.advisorId, 目标车型: task.targetModel, 用户问题: task.userQuestion,
+      内容角度: task.topic, 路由匹配分: task.routeScore, 矩阵空白: task.matrixGap,
+      画像证据ID: (task.profileEvidence || []).join('｜'), 任务日期: task.taskDate,
+      状态: task.status, 路由时间: task.routedAt || '', 顾问决策: task.decision || '', 拒绝原因: task.rejectionReason || '', 决策时间: task.decidedAt || '', 模拟数据: task.simulation ? '是' : '否',
+    };
+    const result = await this.client.upsertByField(this.tableIds.contentTasks, '任务ID', task.taskId, fields);
+    return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
 
   async saveContentPackage(content) {
@@ -161,7 +294,7 @@ export class FeishuOneKosRepository {
   }
 
   async saveProfileTag(tag) {
-    const fields = { 标签ID: tag.tagId, 顾问ID: tag.advisorId, 维度: tag.dimension, 标签: tag.label, 状态: tag.status, 置信度: tag.confidence, 权重: tag.weight, 来源: tag.source, 证据: tag.evidence, 更新时间: tag.updatedAt, 模拟数据: tag.simulation ? '是' : '否' };
+    const fields = { 标签ID: tag.tagId, 顾问ID: tag.advisorId, 画像版本: tag.profileVersion, 维度: tag.dimension, 标签: tag.label, 状态: tag.status, 置信度: tag.confidence, 权重: tag.weight, 来源: tag.source, 来源引用: (tag.sourceRefs || []).join('｜'), 证据: tag.evidence, 更新时间: tag.updatedAt, 模拟数据: tag.simulation ? '是' : '否' };
     const result = await this.client.upsertByField(this.tableIds.profileTags, '标签ID', tag.tagId, fields);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
