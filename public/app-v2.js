@@ -34,6 +34,7 @@ const PAGE_META = {
 };
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
+const ONBOARDING_STORAGE_KEY = 'onekos:onboarding-session';
 
 function initialState() {
   return {
@@ -55,6 +56,16 @@ function initialState() {
     backendState: null,
     apiError: '',
     busy: '',
+    currentAdvisorId: 'ADV-017',
+    currentTaskId: 'TASK-001',
+    onboarding: {
+      advisors: [],
+      selectedAdvisorId: '',
+      session: null,
+      candidates: [],
+      result: null,
+      error: '',
+    },
   };
 }
 
@@ -133,9 +144,51 @@ function renderDashboard() {
 
 function renderProfile() {
   const p = state.profile;
+  const onboarding = state.onboarding;
+  const session = onboarding.session;
+  const storedSessionId = localStorage.getItem(ONBOARDING_STORAGE_KEY);
+  const advisorOptions = onboarding.advisors.map((advisor) => `
+    <button class="advisor-option ${onboarding.selectedAdvisorId === advisor.advisorId ? 'selected' : ''}" data-action="select-advisor" data-advisor-id="${escapeHtml(advisor.advisorId)}">
+      <strong>${escapeHtml(advisor.displayName || advisor.advisorId)}</strong><span>${escapeHtml(advisor.city || '城市待补充')} · ${escapeHtml(advisor.initializationStatus || '待初始化')}</span>
+    </button>`).join('');
+  const candidateTags = onboarding.candidates.map((tag, index) => `
+    <article class="candidate-tag ${tag.locked ? 'locked' : ''}" data-candidate-index="${index}">
+      <div class="candidate-tag-head"><span>${escapeHtml(tag.dimension)}</span><small>置信度 ${tag.confidence}%</small></div>
+      <label>标签<input data-onboarding-label value="${escapeHtml(tag.label)}"></label>
+      <label>权重 <b>${tag.weight}</b><input type="range" min="0" max="100" value="${tag.weight}" data-onboarding-weight></label>
+      <p><b>来源</b>${escapeHtml(tag.source)}</p><p><b>证据</b>${escapeHtml(tag.evidence)}</p>
+      <div class="candidate-actions"><button data-action="remove-onboarding-tag" data-index="${index}">删除候选</button><button data-action="lower-onboarding-tag" data-index="${index}">降低权重</button><button data-action="lock-onboarding-tag" data-index="${index}">${tag.locked ? '已锁定' : '锁定标签'}</button></div>
+    </article>`).join('');
   return `
-    ${simulationNote('本页模拟授权导入过程；不读取真实历史内容、语音或个人资料。')}
-    ${header('STEP 01 · KNOW ME', '先让 Agent 正确认识顾问，再谈个性化', '10 分钟首次校准＋持续行为学习＋证据可解释＋顾问可纠偏。', state.calibrated ? '<button class="secondary" data-page="topics">进入机会雷达 →</button>' : '<button class="primary" data-action="calibrate">完成模拟校准 →</button>')}
+    ${simulationNote('仅处理顾问主动填写或明确授权的资料；历史内容与语音转写均为可选输入。')}
+    ${header('STEP 01 · KNOW ME', '3 分钟画像初始化', '先采集最小资料，再生成带来源、证据和置信度的候选画像，由顾问确认后生效。', state.calibrated ? '<button class="secondary" data-page="topics">进入机会雷达 →</button>' : '')}
+    <section class="card onboarding-shell">
+      <div class="onboarding-progress"><span class="active">1 选择身份</span><span class="${session ? 'active' : ''}">2 填写资料</span><span class="${onboarding.candidates.length ? 'active' : ''}">3 确认候选</span></div>
+      <div class="advisor-picker"><div><span class="eyebrow">ADVISOR IDENTITY</span><h3>选择已有顾问</h3><p>可继续已有身份，也可创建模拟顾问完成比赛演示。</p></div><div class="advisor-options">${advisorOptions || '<span class="empty-copy">正在读取顾问列表…</span>'}</div></div>
+      ${storedSessionId && !session ? `<div class="resume-card"><div><strong>发现未完成的初始化</strong><span>${escapeHtml(storedSessionId)}</span></div><button class="secondary" data-action="resume-onboarding">恢复上次进度</button></div>` : ''}
+      <form class="onboarding-form" id="onboarding-form">
+        <div class="form-title"><div><span class="eyebrow">MINIMUM INPUT</span><h3>创建模拟顾问</h3></div><small>带 * 为必填；示例数据可直接验证闭环</small></div>
+        <div class="form-grid">
+          <label>顾问 ID *<input name="advisorId" value="${escapeHtml(session?.input?.advisorId || onboarding.selectedAdvisorId || `ADV-DEMO-${String(Date.now()).slice(-6)}`)}" required></label>
+          <label>展示名称 *<input name="displayName" value="${escapeHtml(session?.input?.displayName || '顾问小林')}" required></label>
+          <label>城市 *<input name="city" value="${escapeHtml(session?.input?.city || '成都')}" required></label>
+          <label>门店 *<input name="store" value="${escapeHtml(session?.input?.store || '成都模拟门店')}" required></label>
+          <label>从业年限<input name="experienceYears" type="number" min="0" max="50" value="${session?.input?.experienceYears ?? 3}"></label>
+          <label>目标车型<input name="targetModel" value="${escapeHtml(session?.input?.targetModel || '乐道 L60')}"></label>
+          <label class="wide">目标用户 *<input name="targetAudience" value="${escapeHtml(session?.input?.targetAudience || '城市通勤家庭')}" required></label>
+          <label class="wide">擅长问题 *<input name="specialties" value="${escapeHtml((session?.input?.specialties || ['补能路线']).join('，'))}" placeholder="多个问题用逗号分隔" required></label>
+          <label>开场偏好 *<select name="openingStyle"><option>先结论后解释</option><option>真实故事开场</option><option>问题开场</option></select></label>
+          <label>证据偏好 *<select name="evidencePreference"><option>实车场景证明</option><option>数据对比证明</option><option>用户案例证明</option></select></label>
+          <label>表达语气 *<select name="tone"><option>专业克制</option><option>亲切直接</option><option>轻松幽默</option></select></label>
+          <label class="wide">历史内容<textarea name="historyContents" placeholder="可选，每行一条">${escapeHtml((session?.input?.historyContents || []).join('\n'))}</textarea></label>
+          <label class="wide">语音转写<textarea name="voiceTranscript" placeholder="可选，粘贴顾问真实口述转写">${escapeHtml(session?.input?.voiceTranscript || '')}</textarea></label>
+          <label class="wide">禁用表达<input name="forbiddenExpressions" value="${escapeHtml((session?.input?.forbiddenExpressions || []).join('，'))}" placeholder="多个表达用逗号分隔"></label>
+        </div>
+        <div class="form-consent"><span>授权范围：仅使用顾问主动提供的资料生成画像候选，不读取未授权账号。</span><button class="primary" type="button" data-action="start-onboarding">${session ? '更新并新建会话' : '保存资料并开始'}</button></div>
+      </form>
+      ${session ? `<section class="candidate-board"><div class="candidate-board-head"><div><span class="eyebrow">CANDIDATE PROFILE</span><h3>候选画像</h3><p>每条标签都必须保留来源与证据；低置信度只作为候选。</p></div><button class="secondary" data-action="generate-onboarding">${onboarding.candidates.length ? '重新生成候选' : '生成候选画像'}</button></div>${candidateTags ? `<div class="candidate-grid">${candidateTags}</div><div class="confirm-bar"><span>已保留 ${onboarding.candidates.length} 条候选，可编辑标签和权重后确认。</span><button class="primary" data-action="confirm-onboarding">确认画像 V1</button></div>` : '<div class="candidate-empty">资料已保存，点击“生成候选画像”继续。</div>'}</section>` : ''}
+      ${onboarding.error ? `<p class="onboarding-error">${escapeHtml(onboarding.error)}</p>` : ''}
+    </section>
     <section class="calibration-grid">
       ${onboardingSources.map((source, index) => `<article class="source-card ${state.calibrated ? 'done' : ''}"><div><b>${index + 1}</b><em>${state.calibrated ? '✓' : '待授权'}</em></div><h3>${source.label}<span>${source.count}</span></h3><p>${source.detail}</p></article>`).join('')}
     </section>
@@ -313,9 +366,86 @@ function apiLeadToLegacy(lead, sourceUser = '模拟用户') {
   };
 }
 
+function splitList(value, pattern = /[，,\n]/) {
+  return String(value || '').split(pattern).map((item) => item.trim()).filter(Boolean);
+}
+
+function readOnboardingForm() {
+  const form = document.querySelector('#onboarding-form');
+  if (!form?.reportValidity()) return null;
+  const data = new FormData(form);
+  return {
+    advisorId: data.get('advisorId'),
+    displayName: data.get('displayName'),
+    city: data.get('city'),
+    store: data.get('store'),
+    experienceYears: Number(data.get('experienceYears')) || 0,
+    targetAudience: data.get('targetAudience'),
+    targetModel: data.get('targetModel'),
+    specialties: splitList(data.get('specialties')),
+    preferences: {
+      openingStyle: data.get('openingStyle'),
+      evidencePreference: data.get('evidencePreference'),
+      tone: data.get('tone'),
+    },
+    historyContents: splitList(data.get('historyContents'), /\n/),
+    voiceTranscript: data.get('voiceTranscript'),
+    forbiddenExpressions: splitList(data.get('forbiddenExpressions')),
+    identitySource: 'demo',
+    authorizationStatus: '仅使用顾问主动提供的资料',
+  };
+}
+
+function onboardingTagsToProfile(result) {
+  return {
+    maturity: 62,
+    stage: '画像 V1 · 待持续学习',
+    updatedAt: new Date().toLocaleString('zh-CN'),
+    tags: result.tags.map((tag) => ({
+      id: tag.tagId,
+      dimension: tag.dimension,
+      label: tag.label,
+      weight: tag.weight,
+      confidence: tag.confidence,
+      source: tag.source,
+      evidence: tag.evidence,
+      status: tag.status === '锁定' ? 'locked' : 'active',
+    })),
+    events: [{ time: new Date().toLocaleString('zh-CN'), type: '画像初始化', detail: `已确认 ${result.tags.length} 条带证据标签，并创建首条内容任务。` }],
+  };
+}
+
+async function loadAdvisors() {
+  try {
+    const payload = await oneKosApi.listAdvisors();
+    state.onboarding.advisors = payload.data || [];
+    if (state.page === 'profile') render();
+  } catch (error) {
+    state.onboarding.error = `顾问列表读取失败：${error.message}`;
+    if (state.page === 'profile') render();
+  }
+}
+
+async function resumeOnboardingSession(sessionId = localStorage.getItem(ONBOARDING_STORAGE_KEY)) {
+  if (!sessionId) return;
+  try {
+    const payload = await oneKosApi.getOnboardingSession(sessionId);
+    state.onboarding.session = payload.data;
+    state.onboarding.candidates = clone(payload.data.candidates || []).map((tag) => ({ ...tag, locked: tag.status === '锁定' }));
+    state.onboarding.selectedAdvisorId = payload.data.advisorId;
+    state.currentAdvisorId = payload.data.advisorId;
+    state.onboarding.error = '';
+    if (state.page === 'profile') render();
+  } catch (error) {
+    localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+    state.onboarding.error = `无法恢复初始化进度：${error.message}`;
+    if (state.page === 'profile') render();
+  }
+}
+
 async function refreshBackendState({ notify = false } = {}) {
   try {
-    const payload = await oneKosApi.getDemoState();
+    const payload = await oneKosApi.getDemoState(state.currentAdvisorId, state.currentTaskId);
     state.runtime = payload.runtime;
     state.backendState = payload.data;
     state.apiError = '';
@@ -425,6 +555,99 @@ document.addEventListener('click', async (event) => {
     drawer.classList.remove('open');
     drawerMask.classList.remove('open');
     drawer.setAttribute('aria-hidden', 'true');
+  } else if (action === 'select-advisor') {
+    const advisor = state.onboarding.advisors.find((item) => item.advisorId === target.dataset.advisorId);
+    if (!advisor) return;
+    state.onboarding.selectedAdvisorId = advisor.advisorId;
+    state.currentAdvisorId = advisor.advisorId;
+    if (advisor.initializationStatus === 'active') state.calibrated = true;
+    render();
+    showToast(`已选择顾问：${advisor.displayName || advisor.advisorId}`);
+  } else if (action === 'resume-onboarding') {
+    await resumeOnboardingSession();
+    showToast(state.onboarding.session ? '已恢复上次画像初始化进度' : '没有可恢复的初始化进度', state.onboarding.session ? '' : 'warning');
+  } else if (action === 'start-onboarding') {
+    const input = readOnboardingForm();
+    if (!input) return;
+    state.busy = 'onboarding';
+    state.onboarding.error = '';
+    showToast('正在保存顾问资料并创建初始化会话…');
+    try {
+      await oneKosApi.createAdvisor(input);
+      const payload = await oneKosApi.createOnboardingSession(input);
+      state.onboarding.session = payload.data.session;
+      state.onboarding.candidates = [];
+      state.onboarding.selectedAdvisorId = input.advisorId.toUpperCase();
+      state.currentAdvisorId = input.advisorId.toUpperCase();
+      localStorage.setItem(ONBOARDING_STORAGE_KEY, payload.data.session.sessionId);
+      render();
+      showToast('资料已保存，可继续生成候选画像');
+    } catch (error) {
+      state.onboarding.error = error.message;
+      render();
+      showToast(`初始化会话创建失败：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+    }
+  } else if (action === 'generate-onboarding') {
+    if (!state.onboarding.session) return;
+    state.busy = 'onboarding';
+    showToast('正在生成带证据的候选画像…');
+    try {
+      const payload = await oneKosApi.generateOnboardingCandidates(state.onboarding.session.sessionId);
+      state.onboarding.session = payload.data.session;
+      state.onboarding.candidates = clone(payload.data.session.candidates || []).map((tag) => ({ ...tag, locked: false }));
+      state.onboarding.error = '';
+      render();
+      showToast(`已生成 ${state.onboarding.candidates.length} 条候选画像`);
+    } catch (error) {
+      state.onboarding.error = error.message;
+      render();
+      showToast(`候选生成失败：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+    }
+  } else if (action === 'remove-onboarding-tag') {
+    state.onboarding.candidates.splice(Number(target.dataset.index), 1);
+    render();
+  } else if (action === 'lower-onboarding-tag') {
+    const tag = state.onboarding.candidates[Number(target.dataset.index)];
+    if (tag) tag.weight = Math.max(0, tag.weight - 10);
+    render();
+  } else if (action === 'lock-onboarding-tag') {
+    const tag = state.onboarding.candidates[Number(target.dataset.index)];
+    if (tag) tag.locked = !tag.locked;
+    render();
+  } else if (action === 'confirm-onboarding') {
+    const acceptedTags = [...document.querySelectorAll('.candidate-tag')].map((row) => {
+      const index = Number(row.dataset.candidateIndex);
+      const tag = state.onboarding.candidates[index];
+      return { tagId: tag.tagId, label: row.querySelector('[data-onboarding-label]').value, weight: Number(row.querySelector('[data-onboarding-weight]').value), locked: tag.locked };
+    });
+    if (!acceptedTags.length) {
+      showToast('至少保留一条候选画像', 'warning');
+      return;
+    }
+    state.busy = 'onboarding';
+    showToast('正在确认画像并创建首条内容任务…');
+    try {
+      const sessionId = state.onboarding.session.sessionId;
+      const payload = await oneKosApi.confirmOnboardingSession(sessionId, acceptedTags, `WEB-${sessionId}`);
+      state.onboarding.result = payload.data;
+      state.profile = onboardingTagsToProfile(payload.data);
+      state.calibrated = true;
+      state.currentAdvisorId = payload.data.advisor.advisorId;
+      state.currentTaskId = payload.data.task.taskId;
+      localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+      render();
+      showToast('画像 V1 已生效，首条内容任务已创建');
+    } catch (error) {
+      state.onboarding.error = error.message;
+      render();
+      showToast(`画像确认失败，可稍后重试：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+    }
   } else if (action === 'calibrate') {
     state.profile = calibrateProfile();
     state.calibrated = true;
@@ -451,7 +674,7 @@ document.addEventListener('click', async (event) => {
     state.busy = 'content';
     showToast('正在读取画像、任务与品牌知识并生成内容…');
     try {
-      const payload = await oneKosApi.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-WEB-DEMO-001' });
+      const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId, contentId: 'CONTENT-WEB-DEMO-001' });
       state.runtime = payload.runtime;
       state.content = apiContentToLegacy(payload.data.content);
       state.quality = apiQualityToLegacy(payload.data.quality);
@@ -503,7 +726,7 @@ document.addEventListener('click', async (event) => {
     showToast('正在抽取评论字段、计算线索等级并写回反馈事件…');
     try {
       const results = await Promise.all(comments.map((comment, index) => oneKosApi.analyzeComment({
-        advisorId: 'ADV-017', contentId: state.content?.contentId || 'CONTENT-WEB-DEMO-001',
+        advisorId: state.currentAdvisorId, contentId: state.content?.contentId || 'CONTENT-WEB-DEMO-001',
         commentId: comment.id || `COMMENT-WEB-${index + 1}`, text: comment.text,
         platform: '抖音（模拟）', likes: comment.likes || 0,
         leadId: `LEAD-WEB-${index + 1}`, eventId: `EVENT-WEB-${index + 1}`,
@@ -553,3 +776,5 @@ document.addEventListener('click', async (event) => {
 
 render();
 refreshBackendState();
+loadAdvisors();
+resumeOnboardingSession();
