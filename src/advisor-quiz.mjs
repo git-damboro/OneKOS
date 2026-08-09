@@ -61,19 +61,35 @@ const QUESTIONS = [
   { id: 'Q-WRITING', type: 'text', dimension: '表达结构', title: '请用三句话回答：没有家充是否适合买电车？', placeholder: '像平时对用户说话一样回答，至少 12 个字。', minLength: 12 },
   {
     id: 'Q-ADAPT-BOUNDARY', type: 'choice', adaptive: true, dimension: '专业能力', title: '当信息不足时，你通常怎么处理？',
-    options: [choice('ask', '明确说还不能下结论，并继续追问', [term('信息边界', '专业能力', 88), term('谨慎判断', '专业能力', 84), term('继续追问', '专业能力', 80)])],
+    options: [
+      choice('ask', '明确说还不能下结论，并继续追问', [term('信息边界', '专业能力', 88), term('谨慎判断', '专业能力', 84), term('继续追问', '专业能力', 80)]),
+      choice('conditional', '先给出带条件的初步判断，再说明还缺什么信息', [term('条件判断', '专业能力', 88), term('结论边界', '专业能力', 84), term('信息补全', '专业能力', 80)]),
+      choice('verify', '先查资料或请同事复核，确认后再回复用户', [term('主动核验', '专业能力', 88), term('团队协作', '专业能力', 82), term('准确优先', '专业能力', 80)]),
+    ],
   },
   {
     id: 'Q-ADAPT-TONE', type: 'choice', adaptive: true, dimension: '表达语气', title: '用户坚持不同观点时，你会怎么做？',
-    options: [choice('respect', '保留不同意见，再说明适用条件', [term('尊重观点', '表达语气', 88), term('边界清晰', '表达语气', 84), term('平和沟通', '表达语气', 80)])],
+    options: [
+      choice('respect', '保留不同意见，再说明适用条件', [term('尊重观点', '表达语气', 88), term('边界清晰', '表达语气', 84), term('平和沟通', '表达语气', 80)]),
+      choice('evidence', '回到事实和可验证证据，一项项讨论', [term('事实沟通', '表达语气', 88), term('耐心解释', '表达语气', 84), term('理性回应', '表达语气', 80)]),
+      choice('understand', '先追问对方为何这样判断，再回应核心顾虑', [term('倾听优先', '表达语气', 88), term('理解顾虑', '表达语气', 84), term('共情回应', '表达语气', 80)]),
+    ],
   },
   {
     id: 'Q-ADAPT-CONVERSION', type: 'choice', adaptive: true, dimension: '转化能力', title: '识别到高意向用户后，下一步是什么？',
-    options: [choice('manual', '交由顾问确认需求后人工接管', [term('人工接管', '转化能力', 92), term('意向识别', '转化能力', 86), term('合规跟进', '转化能力', 82)])],
+    options: [
+      choice('manual', '由顾问进一步确认需求，再人工接管', [term('人工接管', '转化能力', 92), term('意向识别', '转化能力', 86), term('合规跟进', '转化能力', 82)]),
+      choice('test-drive', '围绕核心问题设计一次针对性试驾', [term('试驾承接', '转化能力', 90), term('体验转化', '转化能力', 86), term('问题验证', '转化能力', 82)]),
+      choice('follow-up', '征得同意后约定下一次沟通时间和所需资料', [term('许可跟进', '转化能力', 90), term('节奏管理', '转化能力', 84), term('资料准备', '转化能力', 80)]),
+    ],
   },
   {
     id: 'Q-ADAPT-CONTENT', type: 'choice', adaptive: true, dimension: '内容形式', title: '如果只能长期坚持一种素材，你会选择什么？',
-    options: [choice('daily', '真实接待问题和日常实拍', [term('日常积累', '内容形式', 88), term('真实素材', '内容形式', 86), term('持续创作', '内容形式', 80)])],
+    options: [
+      choice('daily', '真实接待问题和日常实拍', [term('日常积累', '内容形式', 88), term('真实素材', '内容形式', 86), term('持续创作', '内容形式', 80)]),
+      choice('route', '固定路线的长期实测和前后对比', [term('长期实测', '内容形式', 90), term('路线对比', '内容形式', 86), term('过程记录', '内容形式', 82)]),
+      choice('answer', '持续回答用户最常问的具体问题', [term('问题库', '内容形式', 88), term('连续答疑', '内容形式', 84), term('用户需求', '内容形式', 80)]),
+    ],
   },
 ];
 

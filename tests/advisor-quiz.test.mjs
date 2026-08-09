@@ -43,6 +43,7 @@ test('答完基础题后追加二至四道自适应题并保存当前进度', ()
   assert.equal(session.questionIds.length, 8 + session.adaptiveQuestionIds.length);
   assert.equal(session.currentQuestionId, session.adaptiveQuestionIds[0]);
   assert.equal(Object.keys(session.answers).length, 8);
+  assert.ok(session.adaptiveQuestionIds.every((questionId) => getQuestion(questionId).options.length >= 3));
 });
 
 test('完成问卷后生成三十至五十个有来源证据且同义词合并的画像词', () => {
