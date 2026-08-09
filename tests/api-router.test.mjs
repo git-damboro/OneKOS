@@ -37,18 +37,53 @@ test('内容生成、评论分析与反馈确认路由到业务服务', async ()
   const calls = [];
   const service = {
     async generateContent(body) { calls.push(['content', body]); return { content: { contentId: body.contentId } }; },
+    async getContentPackage(contentId) { calls.push(['get-content', contentId]); return { content: { contentId }, recovered: true }; },
+    async runProductionDemo(body) { calls.push(['production', body]); return { comparison: { complete: true } }; },
     async analyzeComment(body) { calls.push(['comment', body]); return { lead: { grade: 'A' } }; },
     async confirmFeedback(eventId) { calls.push(['feedback', eventId]); return { applied: true }; },
   };
   await withServer(service, async (baseUrl) => {
     const generated = await jsonPost(`${baseUrl}/api/content/generate`, { contentId: 'CONTENT-1' }).then((response) => response.json());
+    const recovered = await fetch(`${baseUrl}/api/content/CONTENT-1`).then((response) => response.json());
+    const production = await jsonPost(`${baseUrl}/api/production/demo`, { contentId: 'CONTENT-2' }).then((response) => response.json());
     const analyzed = await jsonPost(`${baseUrl}/api/comments/analyze`, { commentId: 'COMMENT-1', text: '想试驾' }).then((response) => response.json());
     const confirmed = await jsonPost(`${baseUrl}/api/feedback/EVENT-1/confirm`, {}).then((response) => response.json());
     assert.equal(generated.data.content.contentId, 'CONTENT-1');
+    assert.equal(recovered.data.recovered, true);
+    assert.equal(production.data.comparison.complete, true);
     assert.equal(analyzed.data.lead.grade, 'A');
     assert.equal(confirmed.data.applied, true);
-    assert.deepEqual(calls.map((item) => item[0]), ['content', 'comment', 'feedback']);
+    assert.deepEqual(calls.map((item) => item[0]), ['content', 'get-content', 'production', 'comment', 'feedback']);
   });
+});
+
+test('素材上传路由解析 multipart 并传递素材槽位与媒体元数据', async () => {
+  const calls = [];
+  const service = {
+    async getContentMaterials(contentId) { return { contentId, comparison: { complete: false } }; },
+    async uploadAdvisorAsset(input) { calls.push(input); return { checkedAsset: { status: 'available' } }; },
+  };
+  await withServer(service, async (baseUrl) => {
+    const materials = await fetch(`${baseUrl}/api/content/CONTENT-1/materials`).then((response) => response.json());
+    assert.equal(materials.data.contentId, 'CONTENT-1');
+
+    const form = new FormData();
+    form.set('file', new Blob([new Uint8Array([1, 2, 3])], { type: 'video/mp4' }), 'opening.mp4');
+    form.set('advisorId', 'ADV-017');
+    form.set('durationSec', '9.5');
+    form.set('width', '1080');
+    form.set('height', '1920');
+    const response = await fetch(`${baseUrl}/api/content/CONTENT-1/assets/CONTENT-1-SLOT-001`, { method: 'POST', body: form });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).data.checkedAsset.status, 'available');
+  });
+
+  assert.equal(calls[0].contentId, 'CONTENT-1');
+  assert.equal(calls[0].slotId, 'CONTENT-1-SLOT-001');
+  assert.equal(calls[0].advisorId, 'ADV-017');
+  assert.equal(calls[0].fileName, 'opening.mp4');
+  assert.equal(calls[0].durationSec, 9.5);
+  assert.equal(calls[0].bytes.byteLength, 3);
 });
 
 test('非法 JSON、未知 API 与业务错误返回统一结构', async () => {

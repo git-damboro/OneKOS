@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 
 import { FeishuBitableClient } from './feishu-client.mjs';
 import { FeishuOAuthClient, FeishuSessionStore } from './feishu-auth.mjs';
@@ -8,6 +9,7 @@ import { OneKosService } from './onekos-service.mjs';
 import { createRuntimeConfig, toPublicRuntimeStatus } from './runtime-config.mjs';
 
 const MAX_JSON_BYTES = 1024 * 1024;
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 export function createOneKosRuntime({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
   const config = createRuntimeConfig(env);
@@ -73,6 +75,48 @@ async function readJsonBody(request) {
     error.statusCode = 400;
     throw error;
   }
+}
+
+async function readAssetUpload(request) {
+  const contentType = String(request.headers['content-type'] || '');
+  if (!contentType.startsWith('multipart/form-data')) {
+    const error = new Error('素材上传必须使用 multipart/form-data');
+    error.statusCode = 415;
+    throw error;
+  }
+  const contentLength = Number(request.headers['content-length']) || 0;
+  if (contentLength > MAX_UPLOAD_BYTES + 128 * 1024) {
+    const error = new Error('单个素材不能超过 20MB');
+    error.statusCode = 413;
+    throw error;
+  }
+  const webRequest = new Request('http://127.0.0.1/api/upload', {
+    method: 'POST',
+    headers: { 'content-type': contentType, ...(contentLength ? { 'content-length': String(contentLength) } : {}) },
+    body: Readable.toWeb(request),
+    duplex: 'half',
+  });
+  const form = await webRequest.formData();
+  const file = form.get('file');
+  if (!file || typeof file.arrayBuffer !== 'function') {
+    const error = new Error('请选择要上传的文件');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!file.size || file.size > MAX_UPLOAD_BYTES) {
+    const error = new Error(file.size ? '单个素材不能超过 20MB' : '不能上传空文件');
+    error.statusCode = file.size ? 413 : 400;
+    throw error;
+  }
+  return {
+    advisorId: String(form.get('advisorId') || ''),
+    fileName: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    bytes: new Uint8Array(await file.arrayBuffer()),
+    durationSec: Number(form.get('durationSec')) || 0,
+    width: Number(form.get('width')) || 0,
+    height: Number(form.get('height')) || 0,
+  };
 }
 
 export function createApiHandler({ service, runtimeStatus, authClient = null, authSessions = null }) {
@@ -218,6 +262,33 @@ export function createApiHandler({ service, runtimeStatus, authClient = null, au
       }
       if (request.method === 'POST' && url.pathname === '/api/content/generate') {
         const data = await service.generateContent(await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const contentPackageMatch = request.method === 'GET' && url.pathname.match(/^\/api\/content\/([^/]+)$/);
+      if (contentPackageMatch) {
+        const data = await service.getContentPackage(decodeURIComponent(contentPackageMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const contentMaterialsMatch = request.method === 'GET' && url.pathname.match(/^\/api\/content\/([^/]+)\/materials$/);
+      if (contentMaterialsMatch) {
+        const data = await service.getContentMaterials(decodeURIComponent(contentMaterialsMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const assetUploadMatch = request.method === 'POST' && url.pathname.match(/^\/api\/content\/([^/]+)\/assets\/([^/]+)$/);
+      if (assetUploadMatch) {
+        const data = await service.uploadAdvisorAsset({
+          contentId: decodeURIComponent(assetUploadMatch[1]),
+          slotId: decodeURIComponent(assetUploadMatch[2]),
+          ...await readAssetUpload(request),
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/production/demo') {
+        const data = await service.runProductionDemo(await readJsonBody(request));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }

@@ -7,6 +7,9 @@ export const DEFAULT_TABLE_IDS = Object.freeze({
   contentResults: 'tbl7Lio87hTuAlCz',
   commentLeads: 'tbl3Zkta6p45B6Ln',
   feedbackEvents: 'tbl3jWEOKNqN33w1',
+  shootingRequirements: 'tblSjPyEqK3ziKvm',
+  advisorAssets: 'tbl1SGfQHpkIM1fx',
+  editingJobs: 'tbl3uPLnCieCSTNX',
 });
 
 function positiveInteger(value, fallback) {
