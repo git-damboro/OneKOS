@@ -82,6 +82,44 @@ export function createApiHandler({ service, runtimeStatus }) {
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }
+      if (request.method === 'GET' && url.pathname === '/api/advisors') {
+        const data = await service.listAdvisors();
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/advisors') {
+        const data = await service.createAdvisorIdentity(await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/onboarding/sessions') {
+        const data = await service.createOnboardingSession(await readJsonBody(request));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const onboardingGenerateMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/sessions\/([^/]+)\/generate$/);
+      if (onboardingGenerateMatch) {
+        await readJsonBody(request);
+        const data = await service.generateOnboardingCandidates(decodeURIComponent(onboardingGenerateMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const onboardingConfirmMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/sessions\/([^/]+)\/confirm$/);
+      if (onboardingConfirmMatch) {
+        const body = await readJsonBody(request);
+        const data = await service.confirmOnboardingSession(decodeURIComponent(onboardingConfirmMatch[1]), {
+          acceptedTags: body.acceptedTags || [],
+          idempotencyKey: request.headers['idempotency-key'] || body.idempotencyKey || '',
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const onboardingSessionMatch = request.method === 'GET' && url.pathname.match(/^\/api\/onboarding\/sessions\/([^/]+)$/);
+      if (onboardingSessionMatch) {
+        const data = await service.getOnboardingSession(decodeURIComponent(onboardingSessionMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
       if (request.method === 'POST' && url.pathname === '/api/content/generate') {
         const data = await service.generateContent(await readJsonBody(request));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);

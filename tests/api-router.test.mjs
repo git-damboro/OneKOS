@@ -69,3 +69,65 @@ test('非法 JSON、未知 API 与业务错误返回统一结构', async () => {
     assert.equal((await unknownResponse.json()).error.code, 'API_NOT_FOUND');
   });
 });
+
+test('顾问与初始化 API 完整路由到服务并传递确认幂等键', async () => {
+  const calls = [];
+  const service = {
+    async listAdvisors() { calls.push(['list']); return [{ advisorId: 'ADV-017' }]; },
+    async createAdvisorIdentity(body) { calls.push(['advisor', body]); return { advisor: { advisorId: body.advisorId } }; },
+    async createOnboardingSession(body) { calls.push(['session', body]); return { session: { sessionId: 'ONB/001' } }; },
+    async getOnboardingSession(sessionId) { calls.push(['get', sessionId]); return { sessionId, status: 'draft' }; },
+    async generateOnboardingCandidates(sessionId) { calls.push(['generate', sessionId]); return { session: { sessionId, status: 'generated' } }; },
+    async confirmOnboardingSession(sessionId, body) { calls.push(['confirm', sessionId, body]); return { task: { taskId: 'TASK-NEW-001' } }; },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const advisors = await fetch(`${baseUrl}/api/advisors`).then((response) => response.json());
+    assert.equal(advisors.data[0].advisorId, 'ADV-017');
+
+    const createdAdvisor = await jsonPost(`${baseUrl}/api/advisors`, { advisorId: 'ADV-NEW-001', displayName: '顾问小林' }).then((response) => response.json());
+    assert.equal(createdAdvisor.data.advisor.advisorId, 'ADV-NEW-001');
+
+    const createdSession = await jsonPost(`${baseUrl}/api/onboarding/sessions`, { advisorId: 'ADV-NEW-001' }).then((response) => response.json());
+    assert.equal(createdSession.data.session.sessionId, 'ONB/001');
+
+    const restored = await fetch(`${baseUrl}/api/onboarding/sessions/${encodeURIComponent('ONB/001')}`).then((response) => response.json());
+    assert.equal(restored.data.sessionId, 'ONB/001');
+
+    const generated = await jsonPost(`${baseUrl}/api/onboarding/sessions/${encodeURIComponent('ONB/001')}/generate`, {}).then((response) => response.json());
+    assert.equal(generated.data.session.status, 'generated');
+
+    const confirmResponse = await fetch(`${baseUrl}/api/onboarding/sessions/${encodeURIComponent('ONB/001')}/confirm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'CONFIRM-001' },
+      body: JSON.stringify({ acceptedTags: [{ tagId: 'TAG-001' }] }),
+    });
+    const confirmed = await confirmResponse.json();
+    assert.equal(confirmed.data.task.taskId, 'TASK-NEW-001');
+  });
+
+  assert.deepEqual(calls.map((item) => item[0]), ['list', 'advisor', 'session', 'get', 'generate', 'confirm']);
+  assert.deepEqual(calls.at(-1), ['confirm', 'ONB/001', {
+    acceptedTags: [{ tagId: 'TAG-001' }],
+    idempotencyKey: 'CONFIRM-001',
+  }]);
+});
+
+test('不存在的初始化会话保持统一 404 错误结构', async () => {
+  const service = {
+    async getOnboardingSession() {
+      const error = new Error('初始化会话不存在：ONB-MISSING');
+      error.statusCode = 404;
+      throw error;
+    },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/onboarding/sessions/ONB-MISSING`);
+    const payload = await response.json();
+    assert.equal(response.status, 404);
+    assert.equal(payload.ok, false);
+    assert.match(payload.error.message, /初始化会话不存在/);
+    assert.ok(payload.error.requestId);
+  });
+});

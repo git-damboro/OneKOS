@@ -8,13 +8,13 @@ export class OneKosApiError extends Error {
   }
 }
 
-async function request(path, { method = 'GET', body, timeoutMs = 60_000 } = {}) {
+async function request(path, { method = 'GET', body, headers = {}, timeoutMs = 60_000 } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, {
       method,
-      headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+      headers: body === undefined ? headers : { 'content-type': 'application/json', ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
@@ -38,6 +38,16 @@ async function request(path, { method = 'GET', body, timeoutMs = 60_000 } = {}) 
 
 export const oneKosApi = {
   health: () => request('/api/health', { timeoutMs: 10_000 }),
+  listAdvisors: () => request('/api/advisors'),
+  createAdvisor: (input) => request('/api/advisors', { method: 'POST', body: input }),
+  createOnboardingSession: (input) => request('/api/onboarding/sessions', { method: 'POST', body: input }),
+  getOnboardingSession: (sessionId) => request(`/api/onboarding/sessions/${encodeURIComponent(sessionId)}`),
+  generateOnboardingCandidates: (sessionId) => request(`/api/onboarding/sessions/${encodeURIComponent(sessionId)}/generate`, { method: 'POST', body: {} }),
+  confirmOnboardingSession: (sessionId, acceptedTags, idempotencyKey) => request(`/api/onboarding/sessions/${encodeURIComponent(sessionId)}/confirm`, {
+    method: 'POST',
+    body: { acceptedTags },
+    headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : {},
+  }),
   getDemoState: (advisorId = 'ADV-017', taskId = 'TASK-001') => request(`/api/demo/state?advisorId=${encodeURIComponent(advisorId)}&taskId=${encodeURIComponent(taskId)}`),
   generateContent: (input) => request('/api/content/generate', { method: 'POST', body: input }),
   analyzeComment: (input) => request('/api/comments/analyze', { method: 'POST', body: input }),
