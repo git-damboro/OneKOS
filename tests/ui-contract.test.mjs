@@ -17,13 +17,13 @@ test('首页提供当前七个演示页面和模拟数据标识', async () => {
   assert.match(html, /type="module" src="\.\/app-v2\.js"/);
 });
 
-test('界面脚本包含完整链路动作并调用规则引擎', async () => {
+test('界面脚本包含完整链路动作并调用业务服务与规则引擎', async () => {
   const source = await readFile(path.join(root, 'public', 'app-v2.js'), 'utf8');
 
   assert.match(source, /analyzeSignals/);
-  assert.match(source, /routeTopics/);
+  assert.match(source, /routeOpportunities/);
   assert.match(source, /runFourChecks/);
-  for (const action of ['calibrate', 'route-topics', 'generate-content', 'resolve-matrix', 'publish', 'extract-leads', 'reset']) {
+  for (const action of ['calibrate', 'route-opportunities', 'accept-opportunity', 'generate-content', 'resolve-matrix', 'publish', 'extract-leads', 'reset']) {
     assert.match(source, new RegExp(action));
   }
 });
@@ -91,4 +91,25 @@ test('画像页提供可恢复的一题一屏问卷和可纠偏词云', async ()
   assert.match(css, /\.profile-word-cloud/);
   assert.match(css, /\.cloud-word/);
   assert.match(css, /\.word-detail/);
+});
+
+test('机会雷达从服务端读取真实业务记录并持久化顾问决策', async () => {
+  const source = await readFile(path.join(root, 'public', 'app-v2.js'), 'utf8');
+  const apiClient = await readFile(path.join(root, 'public', 'api-client.js'), 'utf8');
+  const css = await readFile(path.join(root, 'public', 'styles-v2.css'), 'utf8');
+
+  for (const phrase of ['实际任务池', '评论需求信号', '历史内容库', '画像证据', '拒绝原因']) {
+    assert.match(source, new RegExp(phrase));
+  }
+  for (const action of ['route-opportunities', 'accept-opportunity', 'reject-opportunity']) {
+    assert.match(source, new RegExp(action));
+  }
+  for (const method of ['getOpportunities', 'routeOpportunities', 'decideOpportunity']) {
+    assert.match(apiClient, new RegExp(method));
+  }
+  assert.match(source, /item\.decision === 'accept'/);
+  assert.doesNotMatch(source, /平台趋势<\/span><strong>\+18%/);
+  assert.doesNotMatch(source, /矩阵空白<\/span><strong>3<\/strong>/);
+  assert.match(css, /\.score-breakdown/);
+  assert.match(css, /\.topic-actions/);
 });

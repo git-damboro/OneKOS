@@ -28,12 +28,15 @@ test('模拟仓库可保存顾问、恢复初始化会话并幂等写入首条�
   assert.equal((await repository.getOnboardingSession('ONB-001')).status, 'draft');
   assert.equal((await repository.saveContentTask(task)).action, 'created');
   assert.equal((await repository.saveContentTask({ ...task, topic: '更新后的首条内容' })).action, 'updated');
+  await repository.saveCommentLead({ leadId: 'LEAD-001', advisorId: advisor.advisorId, originalComment: '想了解 L60', grade: 'B' });
 
   const snapshot = repository.snapshot();
   assert.equal(snapshot.advisors.filter((item) => item.advisorId === advisor.advisorId).length, 1);
   assert.equal(snapshot.onboardingSessions.filter((item) => item.sessionId === 'ONB-001').length, 1);
   assert.equal(snapshot.contentTasks.filter((item) => item.taskId === task.taskId).length, 1);
   assert.equal(snapshot.contentTasks.find((item) => item.taskId === task.taskId).topic, '更新后的首条内容');
+  assert.deepEqual((await repository.listContentTasks(advisor.advisorId)).map((item) => item.taskId), [task.taskId]);
+  assert.deepEqual((await repository.listCommentLeads(advisor.advisorId)).map((item) => item.leadId), ['LEAD-001']);
 });
 
 test('模拟仓库返回克隆值，不允许调用方修改内部会话', async () => {
@@ -123,7 +126,8 @@ test('飞书仓库映射顾问、标签与首条任务的画像版本字段', as
   await repository.saveContentTask({
     taskId: 'TASK-ADV-NEW-001-001', advisorId: 'ADV-NEW-001', targetModel: '乐道 L60',
     userQuestion: '用户问题', topic: '内容角度', routeScore: 80, matrixGap: '首条任务',
-    profileEvidence: ['TAG-001'], taskDate: '2026-08-09', status: '待生成', simulation: true,
+    profileEvidence: ['TAG-001'], taskDate: '2026-08-09', status: '待生成',
+    routedAt: '2026-08-09T12:00:00.000Z', decision: 'accept', simulation: true,
   });
 
   assert.equal(upserts[0].fields.当前画像版本, 1);
@@ -131,5 +135,38 @@ test('飞书仓库映射顾问、标签与首条任务的画像版本字段', as
   assert.equal(upserts[1].fields.画像版本, 1);
   assert.equal(upserts[1].fields.来源引用, 'ONB-001');
   assert.equal(upserts[2].fields.任务ID, 'TASK-ADV-NEW-001-001');
+  assert.equal(upserts[2].fields.路由时间, '2026-08-09T12:00:00.000Z');
+  assert.equal(upserts[2].fields.顾问决策, 'accept');
+});
+
+test('飞书仓库读取机会任务池和评论需求信号', async () => {
+  const client = {
+    async listRecords(tableId) {
+      if (tableId === 'tbl-tasks') return [{ record_id: 'rec-task', fields: {
+        任务ID: 'TASK-001', 顾问ID: 'ADV-017', 目标车型: '乐道 L60', 用户问题: '没有家充怎么补能？',
+        内容角度: '成都晚高峰补能', 路由匹配分: 88, 矩阵空白: '真实等待时间', 画像证据ID: 'TAG-001｜TAG-002',
+        任务日期: '2026-08-09', 状态: '待生成', 路由时间: '2026-08-09T12:00:00.000Z', 顾问决策: 'accept', 拒绝原因: '', 决策时间: '', 模拟数据: '否',
+      }}];
+      if (tableId === 'tbl-leads') return [{ record_id: 'rec-lead', fields: {
+        线索ID: 'LEAD-001', 顾问ID: 'ADV-017', 车型: 'L60', 原评论: '没有家充，每天通勤怎么补能？',
+        线索等级: 'A', 状态: '待顾问人工接管', 模拟数据: '否',
+      }}];
+      return [];
+    },
+  };
+  const repository = new FeishuOneKosRepository({
+    client,
+    tableIds: { contentTasks: 'tbl-tasks', commentLeads: 'tbl-leads' },
+  });
+
+  const taskRows = await repository.listContentTasks('ADV-017');
+  const leadRows = await repository.listCommentLeads('ADV-017');
+
+  assert.equal(taskRows[0].taskId, 'TASK-001');
+  assert.deepEqual(taskRows[0].profileEvidence, ['TAG-001', 'TAG-002']);
+  assert.equal(taskRows[0].routedAt, '2026-08-09T12:00:00.000Z');
+  assert.equal(taskRows[0].decision, 'accept');
+  assert.equal(leadRows[0].originalComment, '没有家充，每天通勤怎么补能？');
+  assert.equal(leadRows[0].grade, 'A');
 });
 

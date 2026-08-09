@@ -13,7 +13,6 @@ import {
   adjustProfileTag,
   learnFromOutcome,
   analyzeSignals,
-  routeTopics,
   createContentPackage,
   inspectMatrix,
   runFourChecks,
@@ -43,6 +42,9 @@ function initialState() {
     calibrated: false,
     topics: [],
     selectedTopic: null,
+    opportunitySummary: { profileSignals: 0, taskPool: 0, demandSignals: 0, matrixCorpus: 0 },
+    opportunitySource: '',
+    opportunityGeneratedAt: '',
     content: null,
     materialsConfirmed: false,
     matrixResolved: false,
@@ -270,23 +272,23 @@ function renderQuizProfile() {
 }
 
 function renderTopics() {
-  const analysis = analyzeSignals(commentSamples);
+  const summary = state.opportunitySummary;
   return `
-    ${simulationNote('品牌任务、评论热度、平台趋势与矩阵覆盖均为生成的演示输入。')}
-    ${header('STEP 02 · ROUTE', '一题千解：把不同问题分给最适合的人', '不是把同一篇文案改写上千次，而是根据画像、需求和矩阵空白分配内容领地。', `<button class="primary" data-action="route-topics">${state.topics.length ? '重新计算路由' : '生成今日 1—3 个任务'} →</button>`)}
+    ${simulationNote(state.opportunitySource === 'feishu-bitable' ? '本页直接读取飞书多维表格中的画像、任务、评论线索和内容成果。' : '本页数值均来自当前 Repository 业务记录；本地模式使用可写入、可恢复的本地仓库，不再使用页面固定数字。')}
+    ${header('STEP 02 · ROUTE', '一题千解：把真实任务分给最适合的人', '服务端根据当前画像、评论需求信号和历史内容矩阵重新评分，接受与拒绝都会写回任务状态。', `<button class="primary" data-action="route-opportunities">${state.topics.length ? '重新读取并计算' : '读取实际任务池'} →</button>`)}
     <section class="radar-grid">
-      <article class="signal-card"><span>品牌任务</span><strong>2</strong><p>L60 家庭通勤、L90 三排安全</p></article>
-      <article class="signal-card"><span>真实问题</span><strong>${analysis.total}</strong><p>${analysis.themes[0].label}最集中</p></article>
-      <article class="signal-card"><span>平台趋势</span><strong>+18%</strong><p>真实实测与决策清单（模拟）</p></article>
-      <article class="signal-card"><span>矩阵空白</span><strong>3</strong><p>晚高峰补能、老人上下车、安全结构</p></article>
+      <article class="signal-card"><span>画像证据</span><strong>${summary.profileSignals}</strong><p>当前顾问有效或锁定画像词</p></article>
+      <article class="signal-card"><span>实际任务池</span><strong>${summary.taskPool}</strong><p>当前顾问尚未关闭的任务记录</p></article>
+      <article class="signal-card"><span>评论需求信号</span><strong>${summary.demandSignals}</strong><p>Repository 中可用于需求匹配的线索</p></article>
+      <article class="signal-card"><span>历史内容库</span><strong>${summary.matrixCorpus}</strong><p>用于检测内容角度重复的成果记录</p></article>
     </section>
     <div class="layout topic-layout">
-      <section class="card demand-card"><span class="eyebrow">USER DEMAND</span><h3>评论区真正想知道什么</h3>${analysis.themes.map((theme) => `<div class="demand-row"><div><strong>${theme.label}</strong><span>${theme.count} 条信号</span></div><i style="width:${Math.max(12, theme.count / Math.max(1, analysis.total) * 100)}%"></i><p>${theme.examples[0] || '当前样本未出现'}</p></div>`).join('')}<blockquote>${analysis.direction}</blockquote></section>
+      <section class="card demand-card"><span class="eyebrow">ROUTING EVIDENCE</span><h3>本次推荐读取了什么</h3><div class="route-source-list"><p><b>${summary.profileSignals}</b><span>画像标签：决定顾问擅长什么、如何表达</span></p><p><b>${summary.demandSignals}</b><span>评论与线索：决定用户现在关心什么</span></p><p><b>${summary.matrixCorpus}</b><span>历史成果：优先补位没有被充分覆盖的角度</span></p></div><blockquote>${state.opportunityGeneratedAt ? `最近计算：${new Date(state.opportunityGeneratedAt).toLocaleString('zh-CN')}` : '点击“读取实际任务池”后，由服务端返回可追溯推荐。'}</blockquote><small>拒绝任务时必须填写拒绝原因，原因会形成待确认学习事件。</small></section>
       <section class="topics-panel">
-        ${state.topics.length ? state.topics.map((topic, index) => `<article class="topic-card ${state.selectedTopic?.id === topic.id ? 'selected' : ''}"><div class="topic-top"><span>推荐 ${index + 1}</span><b>${topic.score} 匹配分</b></div><h3>${topic.title}</h3><p>${topic.need}</p><div class="chips">${topic.matched.map((tag) => `<span>${tag}</span>`).join('')}</div><div class="reason"><strong>为什么推荐</strong><p>${topic.why}</p>${topic.notChosen ? `<small>相对弱项：${topic.notChosen}</small>` : ''}</div><button data-action="select-topic" data-topic-id="${topic.id}">${state.selectedTopic?.id === topic.id ? '已选择' : '选择这个任务'}</button></article>`).join('') : `<section class="card empty-state"><span>✦</span><h3>等待任务路由</h3><p>先完成顾问校准，再把品牌任务、评论需求和矩阵空白组合成 1—3 个任务。</p><button class="primary" data-action="route-topics">快速生成演示任务</button></section>`}
+        ${state.topics.length ? state.topics.map((topic, index) => `<article class="topic-card ${state.selectedTopic?.id === topic.id ? 'selected' : ''}"><div class="topic-top"><span>推荐 ${index + 1} · ${escapeHtml(topic.status || '候选')}</span><b>${topic.score} 路由分</b></div><h3>${escapeHtml(topic.title)}</h3><p>${escapeHtml(topic.need)}</p><div class="chips">${topic.matched.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('') || '<span>画像证据待增强</span>'}</div><div class="score-breakdown"><span>画像 ${topic.scoreBreakdown.profile}</span><span>需求 ${topic.scoreBreakdown.demand}</span><span>矩阵 ${topic.scoreBreakdown.matrix}</span></div><div class="reason"><strong>为什么推荐</strong><p>${escapeHtml(topic.why)}</p><small>矩阵空白：${escapeHtml(topic.matrixGap || '由历史内容自动计算')}</small>${topic.demandEvidence.length ? `<p>需求证据：${escapeHtml(topic.demandEvidence[0])}</p>` : ''}</div><div class="topic-actions"><button class="primary" data-action="accept-opportunity" data-task-id="${escapeHtml(topic.taskId)}">${state.selectedTopic?.taskId === topic.taskId ? '✓ 已接受' : '接受任务'}</button><button data-action="reject-opportunity" data-task-id="${escapeHtml(topic.taskId)}">拒绝</button></div></article>`).join('') : `<section class="card empty-state"><span>✦</span><h3>当前没有可推荐任务</h3><p>任务池没有当前顾问可处理的候选记录。请先在 ContentTasks 中添加任务，或由画像初始化创建首条任务。</p><button class="primary" data-action="route-opportunities">重新读取实际任务池</button></section>`}
       </section>
     </div>
-    ${state.selectedTopic ? `<div class="sticky-next"><div><span>已选择</span><strong>${state.selectedTopic.title}</strong></div><button class="primary" data-action="generate-content">交给创作 Agent →</button></div>` : ''}`;
+    ${state.selectedTopic ? `<div class="sticky-next"><div><span>已接受并写回</span><strong>${escapeHtml(state.selectedTopic.title)}</strong></div><button class="primary" data-action="generate-content">交给创作 Agent →</button></div>` : ''}`;
 }
 
 function renderStudio() {
@@ -529,6 +531,50 @@ async function resumeQuizSession(sessionId = localStorage.getItem(ONBOARDING_STO
   }
 }
 
+function applyOpportunityPayload(data) {
+  state.opportunitySummary = data.summary || { profileSignals: 0, taskPool: 0, demandSignals: 0, matrixCorpus: 0 };
+  state.opportunitySource = data.dataSource || '';
+  state.opportunityGeneratedAt = data.generatedAt || '';
+  state.topics = (data.recommendations || []).map((task) => ({
+    ...task,
+    id: task.taskId,
+    title: task.topic,
+    need: task.userQuestion,
+    matched: task.matchedProfileTags || [],
+    profileTags: task.matchedProfileTags || [],
+    demandEvidence: task.demandEvidence || [],
+  }));
+  if (state.selectedTopic && !state.topics.some((item) => item.taskId === state.selectedTopic.taskId)) state.selectedTopic = null;
+  const acceptedTopic = state.topics.find((item) => item.decision === 'accept' && item.status === '待生成');
+  if (!state.selectedTopic && acceptedTopic) {
+    state.selectedTopic = acceptedTopic;
+    state.currentTaskId = acceptedTopic.taskId;
+  }
+}
+
+async function loadOpportunities({ recalculate = false, notify = false } = {}) {
+  state.busy = 'opportunities';
+  try {
+    const payload = recalculate
+      ? await oneKosApi.routeOpportunities(state.currentAdvisorId, 3)
+      : await oneKosApi.getOpportunities(state.currentAdvisorId, 3);
+    state.runtime = payload.runtime;
+    applyOpportunityPayload(payload.data);
+    state.apiError = '';
+    if (state.page === 'topics') render();
+    if (notify) showToast(`已从服务端读取 ${state.topics.length} 个推荐任务`);
+  } catch (error) {
+    state.apiError = error.message;
+    state.topics = [];
+    state.selectedTopic = null;
+    if (state.page === 'topics') render();
+    showToast(`机会雷达读取失败：${error.message}`, 'warning');
+  } finally {
+    state.busy = '';
+    updateRuntimeBadge();
+  }
+}
+
 async function refreshBackendState({ notify = false } = {}) {
   try {
     const payload = await oneKosApi.getDemoState(state.currentAdvisorId, state.currentTaskId);
@@ -624,6 +670,7 @@ document.addEventListener('click', async (event) => {
   const pageTarget = event.target.closest('[data-page]');
   if (pageTarget) {
     navigate(pageTarget.dataset.page);
+    if (pageTarget.dataset.page === 'topics') await loadOpportunities();
     return;
   }
   const target = event.target.closest('[data-action]');
@@ -646,6 +693,8 @@ document.addEventListener('click', async (event) => {
     if (!advisor) return;
     state.onboarding.selectedAdvisorId = advisor.advisorId;
     state.currentAdvisorId = advisor.advisorId;
+    state.topics = [];
+    state.selectedTopic = null;
     render();
     showToast(`已选择顾问：${advisor.displayName || advisor.advisorId}`);
   } else if (action === 'create-quiz-session') {
@@ -739,6 +788,7 @@ document.addEventListener('click', async (event) => {
       state.currentTaskId = payload.data.task.taskId;
       localStorage.removeItem(ONBOARDING_STORAGE_KEY);
       navigate('topics');
+      await loadOpportunities({ recalculate: true });
       showToast('词云画像 V1 已确认，正在进入机会雷达');
     } catch (error) {
       state.onboarding.error = error.message;
@@ -839,19 +889,39 @@ document.addEventListener('click', async (event) => {
     state.profile = adjustProfileTag(state.profile, target.dataset.tagId, action === 'lower-tag' ? 'lower' : 'lock');
     render();
     showToast('顾问纠偏已记录，后续任务路由将使用新权重');
-  } else if (action === 'route-topics') {
-    if (!state.calibrated) {
-      state.profile = calibrateProfile();
-      state.calibrated = true;
-      showToast('已自动完成演示校准，再生成任务');
+  } else if (action === 'route-opportunities') {
+    await loadOpportunities({ recalculate: true, notify: true });
+  } else if (action === 'accept-opportunity') {
+    const topic = state.topics.find((item) => item.taskId === target.dataset.taskId);
+    if (!topic) return;
+    try {
+      const payload = await oneKosApi.decideOpportunity(topic.taskId, state.currentAdvisorId, 'accept');
+      topic.status = payload.data.task.status;
+      topic.decision = 'accept';
+      state.selectedTopic = topic;
+      state.currentTaskId = topic.taskId;
+      render();
+      showToast('任务已接受并写回，可进入内容创作室');
+    } catch (error) {
+      showToast(`任务接受失败：${error.message}`, 'warning');
     }
-    state.topics = routeTopics(state.profile, commentSamples);
-    state.selectedTopic = state.topics[0];
-    render();
-  } else if (action === 'select-topic') {
-    state.selectedTopic = state.topics.find((item) => item.id === target.dataset.topicId);
-    render();
-    showToast('任务已选择，拒绝或选择行为也会成为画像证据');
+  } else if (action === 'reject-opportunity') {
+    const topic = state.topics.find((item) => item.taskId === target.dataset.taskId);
+    if (!topic) return;
+    const reason = window.prompt(`请填写拒绝原因：${topic.title}`, '当前缺少完成该选题所需的真实素材');
+    if (reason === null) return;
+    if (!reason.trim()) {
+      showToast('拒绝原因不能为空', 'warning');
+      return;
+    }
+    try {
+      await oneKosApi.decideOpportunity(topic.taskId, state.currentAdvisorId, 'reject', reason.trim());
+      if (state.selectedTopic?.taskId === topic.taskId) state.selectedTopic = null;
+      await loadOpportunities({ recalculate: true });
+      showToast('拒绝原因已写回，并形成待确认学习事件');
+    } catch (error) {
+      showToast(`任务拒绝失败：${error.message}`, 'warning');
+    }
   } else if (action === 'generate-content') {
     state.busy = 'content';
     showToast('正在读取画像、任务与品牌知识并生成内容…');

@@ -56,6 +56,11 @@ export const oneKosApi = {
     headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : {},
   }),
   getDemoState: (advisorId = 'ADV-017', taskId = 'TASK-001') => request(`/api/demo/state?advisorId=${encodeURIComponent(advisorId)}&taskId=${encodeURIComponent(taskId)}`),
+  getOpportunities: (advisorId = 'ADV-017', limit = 3) => request(`/api/opportunities?advisorId=${encodeURIComponent(advisorId)}&limit=${encodeURIComponent(limit)}`),
+  routeOpportunities: (advisorId = 'ADV-017', limit = 3) => request('/api/opportunities/route', { method: 'POST', body: { advisorId, limit } }),
+  decideOpportunity: (taskId, advisorId, decision, reason = '') => request(`/api/opportunities/${encodeURIComponent(taskId)}/decision`, {
+    method: 'POST', body: { advisorId, decision, reason },
+  }),
   generateContent: (input) => request('/api/content/generate', { method: 'POST', body: input }),
   analyzeComment: (input) => request('/api/comments/analyze', { method: 'POST', body: input }),
   confirmFeedback: (eventId) => request(`/api/feedback/${encodeURIComponent(eventId)}/confirm`, { method: 'POST', body: {} }),

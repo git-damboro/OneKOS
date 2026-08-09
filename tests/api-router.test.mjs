@@ -159,3 +159,29 @@ test('问卷初始化 API 支持创建、恢复、逐题提交、完成和确认
   assert.deepEqual(calls.map((item) => item[0]), ['create', 'get', 'answer', 'complete', 'confirm']);
   assert.equal(calls.at(-1)[2].idempotencyKey, 'QUIZ-CONFIRM-001');
 });
+
+test('机会雷达 API 支持读取、重新路由和接受拒绝决策', async () => {
+  const calls = [];
+  const service = {
+    async getOpportunities(input) { calls.push(['get', input]); return { recommendations: [{ taskId: 'TASK-001' }] }; },
+    async routeOpportunities(input) { calls.push(['route', input]); return { recommendations: [{ taskId: 'TASK-002' }] }; },
+    async decideOpportunity(taskId, input) { calls.push(['decision', taskId, input]); return { task: { taskId, status: '已拒绝' } }; },
+  };
+
+  await withServer(service, async (baseUrl) => {
+    const listed = await fetch(`${baseUrl}/api/opportunities?advisorId=ADV-017&limit=2`).then((response) => response.json());
+    assert.equal(listed.data.recommendations[0].taskId, 'TASK-001');
+    const routed = await jsonPost(`${baseUrl}/api/opportunities/route`, { advisorId: 'ADV-017', limit: 3 }).then((response) => response.json());
+    assert.equal(routed.data.recommendations[0].taskId, 'TASK-002');
+    const decided = await jsonPost(`${baseUrl}/api/opportunities/${encodeURIComponent('TASK/002')}/decision`, {
+      advisorId: 'ADV-017', decision: 'reject', reason: '缺少素材',
+    }).then((response) => response.json());
+    assert.equal(decided.data.task.status, '已拒绝');
+  });
+
+  assert.deepEqual(calls, [
+    ['get', { advisorId: 'ADV-017', limit: 2 }],
+    ['route', { advisorId: 'ADV-017', limit: 3 }],
+    ['decision', 'TASK/002', { advisorId: 'ADV-017', decision: 'reject', reason: '缺少素材' }],
+  ]);
+});

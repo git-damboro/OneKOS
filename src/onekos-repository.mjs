@@ -46,6 +46,8 @@ export class SimulationOneKosRepository {
   async getAdvisor(advisorId) { return clone(this.data.advisors.find((item) => item.advisorId === advisorId) || null); }
   async getProfileTags(advisorId) { return clone(this.data.profileTags.filter((item) => item.advisorId === advisorId)); }
   async getTask(taskId) { return clone(this.data.contentTasks.find((item) => item.taskId === taskId) || null); }
+  async listContentTasks(advisorId) { return clone(this.data.contentTasks.filter((item) => !advisorId || item.advisorId === advisorId)); }
+  async listCommentLeads(advisorId) { return clone(this.data.commentLeads.filter((item) => !advisorId || item.advisorId === advisorId)); }
   async getValidKnowledge(model, today) { return clone(this.data.brandKnowledge.filter((item) => item.model === model && item.status === '有效' && (!item.validUntil || item.validUntil >= today))); }
   async listContentResults() { return clone(this.data.contentResults); }
   async getFeedbackEvent(eventId) { return clone(this.data.feedbackEvents.find((item) => item.eventId === eventId) || null); }
@@ -105,6 +107,28 @@ function mapAdvisor(record) {
   };
 }
 
+function mapContentTask(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id, taskId: f.任务ID, advisorId: f.顾问ID, targetModel: f.目标车型,
+    userQuestion: f.用户问题, topic: f.内容角度, routeScore: f.路由匹配分, matrixGap: f.矩阵空白,
+    profileEvidence: split(f.画像证据ID), taskDate: f.任务日期, status: f.状态,
+    routedAt: f.路由时间 || '', decision: f.顾问决策 || '', rejectionReason: f.拒绝原因 || '', decidedAt: f.决策时间 || '', simulation: yes(f.模拟数据),
+  };
+}
+
+function mapCommentLead(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id, leadId: f.线索ID, commentId: f.评论ID, advisorId: f.顾问ID,
+    contentId: f.内容ID, platform: f.平台, originalComment: f.原评论, city: f.城市,
+    familyStructure: f.家庭结构, model: f.车型, purchaseWindow: f.购车时间,
+    testDriveIntent: f.试驾意愿, score: f.线索分, grade: f.线索等级, status: f.状态,
+    nextAction: f.下一步建议, fieldEvidence: parseJson(f.字段证据, {}), updatedAt: f.最后同步时间,
+    simulation: yes(f.模拟数据),
+  };
+}
+
 export class FeishuOneKosRepository {
   constructor({ client, tableIds }) {
     this.client = client;
@@ -137,8 +161,17 @@ export class FeishuOneKosRepository {
   async getTask(taskId) {
     const record = await this.find('contentTasks', '任务ID', taskId);
     if (!record) return null;
-    const f = record.fields;
-    return { recordId: record.record_id, taskId: f.任务ID, advisorId: f.顾问ID, targetModel: f.目标车型, userQuestion: f.用户问题, topic: f.内容角度, routeScore: f.路由匹配分, matrixGap: f.矩阵空白, profileEvidence: split(f.画像证据ID), taskDate: f.任务日期, status: f.状态, simulation: yes(f.模拟数据) };
+    return mapContentTask(record);
+  }
+
+  async listContentTasks(advisorId) {
+    const records = await this.client.listRecords(this.tableIds.contentTasks);
+    return records.filter((record) => record.fields.任务ID && (!advisorId || record.fields.顾问ID === advisorId)).map(mapContentTask);
+  }
+
+  async listCommentLeads(advisorId) {
+    const records = await this.client.listRecords(this.tableIds.commentLeads);
+    return records.filter((record) => record.fields.线索ID && (!advisorId || record.fields.顾问ID === advisorId)).map(mapCommentLead);
   }
 
   async getValidKnowledge(model, today) {
@@ -224,7 +257,7 @@ export class FeishuOneKosRepository {
       任务ID: task.taskId, 顾问ID: task.advisorId, 目标车型: task.targetModel, 用户问题: task.userQuestion,
       内容角度: task.topic, 路由匹配分: task.routeScore, 矩阵空白: task.matrixGap,
       画像证据ID: (task.profileEvidence || []).join('｜'), 任务日期: task.taskDate,
-      状态: task.status, 模拟数据: task.simulation ? '是' : '否',
+      状态: task.status, 路由时间: task.routedAt || '', 顾问决策: task.decision || '', 拒绝原因: task.rejectionReason || '', 决策时间: task.decidedAt || '', 模拟数据: task.simulation ? '是' : '否',
     };
     const result = await this.client.upsertByField(this.tableIds.contentTasks, '任务ID', task.taskId, fields);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };

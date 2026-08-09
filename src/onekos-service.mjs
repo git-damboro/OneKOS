@@ -13,6 +13,7 @@ import {
   mergeQuizCandidateTerms,
   recordQuizAnswer,
 } from './advisor-quiz.mjs';
+import { decideOpportunity as buildOpportunityDecision, routeOpportunities as buildOpportunityRoutes } from './opportunity-router.mjs';
 
 function requireRecord(record, label, id) {
   if (!record) {
@@ -374,6 +375,66 @@ export class OneKosService {
     }
   }
 
+  async getOpportunities({ advisorId, limit = 3 } = {}) {
+    const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
+    const [tasks, profileTags, leads, contentResults] = await Promise.all([
+      this.repository.listContentTasks(advisorId),
+      this.repository.getProfileTags(advisorId),
+      this.repository.listCommentLeads(advisorId),
+      this.repository.listContentResults(),
+    ]);
+    return {
+      advisor,
+      ...buildOpportunityRoutes({ advisorId, tasks, profileTags, leads, contentResults, limit }),
+      generatedAt: this.timestamp(),
+      dataSource: this.mode === 'simulation' ? 'repository-simulation' : 'feishu-bitable',
+    };
+  }
+
+  async routeOpportunities({ advisorId, limit = 3 } = {}) {
+    const result = await this.getOpportunities({ advisorId, limit });
+    await Promise.all(result.recommendations.map((recommendation) => this.repository.saveContentTask({
+      ...recommendation,
+      profileEvidence: recommendation.matchedProfileTagIds,
+      routeScore: recommendation.score,
+      routedAt: result.generatedAt,
+    })));
+    return result;
+  }
+
+  async decideOpportunity(taskId, { advisorId, decision, reason = '' } = {}) {
+    const task = requireRecord(await this.repository.getTask(taskId), '机会任务', taskId);
+    if (task.advisorId !== advisorId) {
+      const error = new Error(`任务 ${taskId} 不属于顾问 ${advisorId}`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const tags = await this.repository.getProfileTags(advisorId);
+    const affectedTag = (task.profileEvidence || []).map((tagId) => tags.find((tag) => tag.tagId === tagId)).find(Boolean)
+      || [...tags].sort((left, right) => Number(right.weight || 0) - Number(left.weight || 0))[0];
+    let result;
+    try {
+      result = buildOpportunityDecision(task, {
+        decision,
+        reason,
+        affectedTagId: affectedTag?.tagId || null,
+        eventId: `EVENT-OPPORTUNITY-${taskId}`,
+        now: this.timestamp(),
+      });
+    } catch (error) {
+      error.statusCode = 400;
+      throw error;
+    }
+    const taskWrite = await this.repository.saveContentTask(result.task);
+    let eventWrite = null;
+    if (result.feedbackEvent) eventWrite = await this.repository.saveFeedbackEvent(result.feedbackEvent);
+    if (decision === 'accept') {
+      const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
+      await this.repository.saveAdvisor({ ...advisor, workflowStatus: '待生成' });
+    }
+    return { ...result, taskWrite, eventWrite };
+  }
+
   async getAdvisorContext({ advisorId = 'ADV-017', taskId = 'TASK-001' } = {}) {
     const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
     const task = requireRecord(await this.repository.getTask(taskId), '内容任务', taskId);
@@ -403,6 +464,11 @@ export class OneKosService {
 
   async generateContent({ advisorId = 'ADV-017', taskId = 'TASK-001', contentId = 'CONTENT-DEMO-001' } = {}) {
     const context = await this.getAdvisorContext({ advisorId, taskId });
+    if (context.task.status !== '待生成') {
+      const error = new Error(`任务 ${taskId} 尚未被顾问接受，不能生成内容`);
+      error.statusCode = 409;
+      throw error;
+    }
     let candidate;
     let generator = 'local-deterministic';
     if (this.llmClient) {

@@ -153,6 +153,29 @@ export function createApiHandler({ service, runtimeStatus }) {
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }
+      if (request.method === 'GET' && url.pathname === '/api/opportunities') {
+        const data = await service.getOpportunities({
+          advisorId: url.searchParams.get('advisorId') || 'ADV-017',
+          limit: Number(url.searchParams.get('limit')) || 3,
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/opportunities/route') {
+        const body = await readJsonBody(request);
+        const data = await service.routeOpportunities({ advisorId: body.advisorId || 'ADV-017', limit: Number(body.limit) || 3 });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const opportunityDecisionMatch = request.method === 'POST' && url.pathname.match(/^\/api\/opportunities\/([^/]+)\/decision$/);
+      if (opportunityDecisionMatch) {
+        const body = await readJsonBody(request);
+        const data = await service.decideOpportunity(decodeURIComponent(opportunityDecisionMatch[1]), {
+          advisorId: body.advisorId || 'ADV-017', decision: body.decision, reason: body.reason || '',
+        });
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
       if (request.method === 'POST' && url.pathname === '/api/content/generate') {
         const data = await service.generateContent(await readJsonBody(request));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
