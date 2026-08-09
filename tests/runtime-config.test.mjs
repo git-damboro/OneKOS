@@ -7,6 +7,7 @@ const feishuEnv = {
   FEISHU_APP_ID: 'cli_test',
   FEISHU_APP_SECRET: 'feishu-secret',
   FEISHU_BASE_APP_TOKEN: 'base-token',
+  FEISHU_TABLE_ONBOARDING_SESSIONS: 'tbl-onboarding',
 };
 
 const llmEnv = {
@@ -27,6 +28,12 @@ test('仅配置飞书时判定为 hybrid', () => {
   assert.equal(config.mode, 'hybrid');
   assert.equal(config.feishu.configured, true);
   assert.equal(config.llm.configured, false);
+});
+
+test('飞书真实画像链路要求显式配置问卷会话表', () => {
+  const config = createRuntimeConfig({ ...feishuEnv, FEISHU_TABLE_ONBOARDING_SESSIONS: '' });
+  assert.equal(config.feishu.configured, false);
+  assert.match(config.warnings.join(' '), /问卷会话表/);
 });
 
 test('未配置外部服务时判定为 simulation', () => {

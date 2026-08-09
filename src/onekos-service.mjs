@@ -148,6 +148,22 @@ export class OneKosService {
     return { advisor, write, created: true };
   }
 
+  async resolveFeishuAdvisor(user = {}) {
+    const openId = String(user.openId || '').trim();
+    if (!openId) {
+      const error = new Error('飞书用户身份缺少 open_id');
+      error.statusCode = 400;
+      throw error;
+    }
+    const advisors = await this.repository.listAdvisors();
+    const existing = advisors.find((advisor) => advisor.externalUserId === openId);
+    if (existing) return { advisor: existing, created: false };
+    return this.createAdvisorIdentity({
+      advisorId: `FS-${openId}`, displayName: user.name || '飞书顾问', city: '', store: '',
+      identitySource: 'feishu', externalUserId: openId,
+    });
+  }
+
   async createOnboardingSession(rawInput) {
     const input = normalizeOnboardingInput(rawInput);
     const now = this.timestamp();

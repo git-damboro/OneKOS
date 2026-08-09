@@ -57,6 +57,7 @@ function initialState() {
     runtime: null,
     backendState: null,
     apiError: '',
+    currentUser: null,
     busy: '',
     currentAdvisorId: 'ADV-017',
     currentTaskId: 'TASK-001',
@@ -486,6 +487,23 @@ async function loadAdvisors() {
   } catch (error) {
     state.onboarding.error = `顾问列表读取失败：${error.message}`;
     if (state.page === 'profile') render();
+  }
+}
+
+async function restoreFeishuIdentity() {
+  try {
+    const payload = await oneKosApi.currentUser();
+    const user = payload.data?.user;
+    if (!payload.data?.authenticated || !user?.advisorId) return;
+    state.currentUser = user;
+    state.currentAdvisorId = user.advisorId;
+    state.onboarding.selectedAdvisorId = user.advisorId;
+    await loadAdvisors();
+    const advisor = state.onboarding.advisors.find((item) => item.advisorId === user.advisorId);
+    if (advisor?.initializationStatus !== 'active') navigate('profile');
+    else render();
+  } catch {
+    // 本地演示与未配置飞书登录时保持现有模拟身份。
   }
 }
 
@@ -1030,3 +1048,4 @@ render();
 refreshBackendState();
 loadAdvisors();
 resumeQuizSession();
+restoreFeishuIdentity();

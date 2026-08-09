@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { FeishuBitableClient } from './feishu-client.mjs';
+import { FeishuOAuthClient, FeishuSessionStore } from './feishu-auth.mjs';
 import { OpenAICompatibleClient } from './llm-client.mjs';
 import { FeishuOneKosRepository, SimulationOneKosRepository } from './onekos-repository.mjs';
 import { OneKosService } from './onekos-service.mjs';
@@ -19,11 +20,26 @@ export function createOneKosRuntime({ env = process.env, fetchImpl = globalThis.
   const llmClient = config.llm.configured
     ? new OpenAICompatibleClient({ ...config.llm, fetchImpl })
     : null;
+  const authClient = config.feishu.loginConfigured ? new FeishuOAuthClient({
+    appId: config.feishu.appId, appSecret: config.feishu.appSecret, redirectUri: config.feishu.oauthRedirectUri,
+    apiBaseUrl: config.feishu.apiBaseUrl, fetchImpl,
+  }) : null;
   return {
     config,
     runtimeStatus: toPublicRuntimeStatus(config),
     service: new OneKosService({ repository, llmClient, mode: config.mode }),
+    authClient,
+    authSessions: new FeishuSessionStore(),
   };
+}
+
+function parseCookies(request) {
+  return Object.fromEntries(String(request.headers.cookie || '').split(';').map((item) => item.trim().split('=').map(decodeURIComponent)).filter(([key]) => key));
+}
+
+function redirect(response, location, cookie = '') {
+  response.writeHead(302, { Location: location, ...(cookie ? { 'Set-Cookie': cookie } : {}) });
+  response.end();
 }
 
 function sendJson(response, status, payload, requestId) {
@@ -59,9 +75,28 @@ async function readJsonBody(request) {
   }
 }
 
-export function createApiHandler({ service, runtimeStatus }) {
+export function createApiHandler({ service, runtimeStatus, authClient = null, authSessions = null }) {
   return async function handleApiRequest(request, response) {
     const url = new URL(request.url || '/', 'http://127.0.0.1');
+    if (request.method === 'GET' && url.pathname === '/auth/feishu/login') {
+      if (!authClient || !authSessions) return false;
+      const state = authSessions.createState(url.searchParams.get('returnTo') || '/');
+      redirect(response, authClient.authorizeUrl(state));
+      return true;
+    }
+    if (request.method === 'GET' && url.pathname === '/auth/feishu/callback') {
+      if (!authClient || !authSessions) return false;
+      const returnTo = authSessions.consumeState(url.searchParams.get('state') || '');
+      if (!returnTo || !url.searchParams.get('code')) { response.writeHead(400); response.end('Feishu login expired'); return true; }
+      try {
+        const token = await authClient.exchangeCode(url.searchParams.get('code'));
+        const user = await authClient.getUser(token.access_token);
+        const identity = await service.resolveFeishuAdvisor(user);
+        const sessionId = authSessions.createSession({ ...user, advisorId: identity.advisor.advisorId });
+        redirect(response, returnTo, `onekos_session=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax; Secure`);
+      } catch (error) { response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' }); response.end(error.message); }
+      return true;
+    }
     if (!url.pathname.startsWith('/api/')) return false;
     const requestId = randomUUID();
 
@@ -72,6 +107,11 @@ export function createApiHandler({ service, runtimeStatus }) {
       }
       if (request.method === 'GET' && url.pathname === '/api/health') {
         sendJson(response, 200, { ok: true, runtime: runtimeStatus, timestamp: new Date().toISOString() }, requestId);
+        return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/auth/me') {
+        const session = authSessions?.getSession(parseCookies(request).onekos_session || '');
+        sendJson(response, 200, { ok: true, data: session ? { authenticated: true, user: session } : { authenticated: false }, runtime: runtimeStatus }, requestId);
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/demo/state') {

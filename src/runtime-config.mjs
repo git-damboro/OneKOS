@@ -21,11 +21,14 @@ function hint(value) {
 }
 
 export function createRuntimeConfig(env = process.env) {
-  const feishuConfigured = Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.FEISHU_BASE_APP_TOKEN);
+  const onboardingSessionsTableId = env.FEISHU_TABLE_ONBOARDING_SESSIONS || '';
+  const hasFeishuCredentials = Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.FEISHU_BASE_APP_TOKEN);
+  const feishuConfigured = Boolean(hasFeishuCredentials && onboardingSessionsTableId);
+  const feishuLoginConfigured = Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.FEISHU_OAUTH_REDIRECT_URI);
   const llmConfigured = Boolean(env.LLM_BASE_URL && env.LLM_API_KEY && env.LLM_MODEL);
   const warnings = [];
 
-  if (!feishuConfigured) warnings.push('飞书未配置，使用仓库内模拟数据');
+  if (!feishuConfigured) warnings.push(hasFeishuCredentials ? '飞书问卷会话表未配置，使用仓库内模拟数据' : '飞书未配置，使用仓库内模拟数据');
   if (!llmConfigured) warnings.push('外部模型未配置，使用本地确定性生成器');
 
   return {
@@ -37,8 +40,10 @@ export function createRuntimeConfig(env = process.env) {
       appId: env.FEISHU_APP_ID || '',
       appSecret: env.FEISHU_APP_SECRET || '',
       appToken: env.FEISHU_BASE_APP_TOKEN || '',
+      loginConfigured: feishuLoginConfigured,
+      oauthRedirectUri: env.FEISHU_OAUTH_REDIRECT_URI || '',
       apiBaseUrl: (env.FEISHU_API_BASE_URL || 'https://open.feishu.cn/open-apis').replace(/\/$/, ''),
-      tableIds: { ...DEFAULT_TABLE_IDS },
+      tableIds: { ...DEFAULT_TABLE_IDS, onboardingSessions: onboardingSessionsTableId },
     },
     llm: {
       configured: llmConfigured,
@@ -58,6 +63,7 @@ export function toPublicRuntimeStatus(config) {
     warnings: [...config.warnings],
     feishu: {
       configured: config.feishu.configured,
+      loginConfigured: config.feishu.loginConfigured,
       appTokenHint: hint(config.feishu.appToken),
     },
     llm: {

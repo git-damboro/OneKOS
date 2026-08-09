@@ -38,6 +38,7 @@ async function request(path, { method = 'GET', body, headers = {}, timeoutMs = 6
 
 export const oneKosApi = {
   health: () => request('/api/health', { timeoutMs: 10_000 }),
+  currentUser: () => request('/api/auth/me', { timeoutMs: 10_000 }),
   listAdvisors: () => request('/api/advisors'),
   createAdvisor: (input) => request('/api/advisors', { method: 'POST', body: input }),
   createQuizSession: (input) => request('/api/onboarding/quiz-sessions', { method: 'POST', body: input }),
