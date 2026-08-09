@@ -6,6 +6,13 @@ import {
   normalizeModelCandidates,
   normalizeOnboardingInput,
 } from './advisor-onboarding.mjs';
+import {
+  completeQuizSession as buildCompletedQuizSession,
+  createQuizSession as buildQuizSession,
+  getQuestion,
+  mergeQuizCandidateTerms,
+  recordQuizAnswer,
+} from './advisor-quiz.mjs';
 
 function requireRecord(record, label, id) {
   if (!record) {
@@ -161,6 +168,81 @@ export class OneKosService {
       this.repository.saveOnboardingSession(session),
     ]);
     return { advisor, session, advisorWrite, sessionWrite };
+  }
+
+  async createQuizSession(raw = {}) {
+    const advisorId = String(raw.advisorId || '').trim().toUpperCase();
+    const identity = { displayName: raw.displayName, city: raw.city, store: raw.store };
+    const now = this.timestamp();
+    const session = {
+      ...buildQuizSession({ advisorId, identity }, { sessionId: this.idFactory(), now }),
+      simulation: raw.identitySource !== 'feishu',
+    };
+    const advisor = {
+      advisorId, ...session.identity, experienceYears: 0, targetAudience: '', profileMaturity: 0,
+      workflowStatus: '答题中', initializationStatus: 'collecting', profileVersion: 0,
+      identitySource: raw.identitySource === 'feishu' ? 'feishu' : 'demo', authorizationStatus: '仅使用顾问主动回答的问卷',
+      simulation: session.simulation,
+    };
+    const [advisorWrite, sessionWrite] = await Promise.all([
+      this.repository.saveAdvisor(advisor), this.repository.saveOnboardingSession(session),
+    ]);
+    return { advisor, session, question: getQuestion(session.currentQuestionId), advisorWrite, sessionWrite };
+  }
+
+  async getQuizSession(sessionId) {
+    const session = await this.getOnboardingSession(sessionId);
+    if (session.mode !== 'quiz') {
+      const error = new Error('当前初始化会话不是问卷模式');
+      error.statusCode = 409;
+      throw error;
+    }
+    return { session, question: session.currentQuestionId ? getQuestion(session.currentQuestionId) : null };
+  }
+
+  async submitQuizAnswer(sessionId, answer) {
+    const { session } = await this.getQuizSession(sessionId);
+    const updated = recordQuizAnswer(session, answer, this.timestamp());
+    const write = await this.repository.saveOnboardingSession(updated);
+    return { session: updated, question: updated.currentQuestionId ? getQuestion(updated.currentQuestionId) : null, write };
+  }
+
+  async completeQuizSession(sessionId) {
+    const { session } = await this.getQuizSession(sessionId);
+    let updated = buildCompletedQuizSession(session, { now: this.timestamp() });
+    const warnings = [];
+    if (this.llmClient) {
+      try {
+        const raw = await this.llmClient.generateJson({
+          system: '你是 OneKOS 顾问表达分析器。仅依据短文回答提炼可验证的表达词，只返回 JSON 对象，字段为 terms 数组。',
+          user: JSON.stringify({ writingAnswer: session.answers['Q-WRITING'], allowedDimensions: ['表达结构', '表达语气', '证据偏好', '内容形式'] }),
+          temperature: 0.1,
+        });
+        const merged = mergeQuizCandidateTerms(updated.candidates, raw, session.advisorId);
+        if (merged.length > updated.candidates.length) {
+          updated.candidates = merged;
+          updated.generator = 'quiz-hybrid';
+        }
+      } catch {
+        warnings.push('短文模型分析不可用，已使用本地规则完成词云。');
+      }
+    }
+    const byDimension = (dimension) => updated.candidates.filter((item) => item.dimension === dimension).sort((a, b) => b.weight - a.weight);
+    const input = {
+      advisorId: session.advisorId, displayName: session.identity.displayName, city: session.identity.city, store: session.identity.store,
+      experienceYears: 0, targetAudience: byDimension('目标用户')[0]?.term || '待持续学习', targetModel: '乐道 L60',
+      specialties: byDimension('专业能力').slice(0, 3).map((item) => item.term),
+      preferences: {
+        openingStyle: byDimension('表达结构')[0]?.term || '自然表达',
+        evidencePreference: byDimension('证据偏好')[0]?.term || '真实证据',
+        tone: byDimension('表达语气')[0]?.term || '专业克制',
+      },
+      historyContents: [], voiceTranscript: session.answers['Q-WRITING'] || '', forbiddenExpressions: [],
+      identitySource: session.simulation ? 'demo' : 'feishu', externalUserId: '', authorizationStatus: '仅使用顾问主动回答的问卷',
+    };
+    updated = { ...updated, input, warnings: [...(updated.warnings || []), ...warnings] };
+    const write = await this.repository.saveOnboardingSession(updated);
+    return { session: updated, write };
   }
 
   async getOnboardingSession(sessionId) {

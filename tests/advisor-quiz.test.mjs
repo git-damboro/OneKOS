@@ -6,6 +6,7 @@ import {
   completeQuizSession,
   createQuizSession,
   getQuestion,
+  mergeQuizCandidateTerms,
   recordQuizAnswer,
 } from '../src/advisor-quiz.mjs';
 
@@ -69,4 +70,16 @@ test('未答完当前问卷时禁止生成词云', () => {
   }, { sessionId: 'QUIZ-001', now });
 
   assert.throws(() => completeQuizSession(session, { now }), /尚未完成/);
+});
+
+test('模型表达词只有维度和证据有效时才合并进规则词云', () => {
+  const base = [{ tagId: 'TERM-01', term: '先说结论', label: '先说结论', dimension: '表达结构', weight: 80, confidence: 80, sources: ['Q-OPENING'], evidence: ['选择结论式开场'] }];
+  const merged = mergeQuizCandidateTerms(base, { terms: [
+    { term: '有边界感', dimension: '表达语气', weight: 76, confidence: 85, evidence: '短文使用“结合每天里程判断”' },
+    { term: '敏感推断', dimension: '性格类型', weight: 99, confidence: 99, evidence: '无效维度' },
+    { term: '无证据', dimension: '表达语气', weight: 90, confidence: 90, evidence: '' },
+  ] }, 'ADV-QUIZ-001');
+
+  assert.ok(merged.some((item) => item.term === '有边界感' && item.source === '短文模型分析'));
+  assert.equal(merged.some((item) => item.term === '敏感推断' || item.term === '无证据'), false);
 });

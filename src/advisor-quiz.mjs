@@ -81,6 +81,7 @@ const QUESTION_MAP = new Map(QUESTIONS.map((question) => [question.id, question]
 export const BASE_QUESTION_IDS = QUESTIONS.filter((question) => !question.adaptive).map((question) => question.id);
 const DEFAULT_ADAPTIVE_IDS = ['Q-ADAPT-CONTENT', 'Q-ADAPT-CONVERSION'];
 const SYNONYMS = new Map([['结论先行', '先说结论'], ['先讲结论', '先说结论'], ['实车场景', '场景证据']]);
+const ALLOWED_DIMENSIONS = new Set(['专业能力', '地域场景', '目标用户', '表达结构', '表达语气', '证据偏好', '内容形式', '转化能力', '禁用表达']);
 
 function requestError(message, statusCode = 400) {
   const error = new Error(message);
@@ -213,4 +214,34 @@ export function completeQuizSession(session, { now }) {
   next.generator = 'quiz-rule-fallback';
   next.updatedAt = now;
   return next;
+}
+
+export function mergeQuizCandidateTerms(baseCandidates, raw, advisorId) {
+  const result = structuredClone(baseCandidates || []);
+  const byTerm = new Map(result.map((item) => [item.term, item]));
+  const rows = Array.isArray(raw) ? raw : raw?.terms;
+  if (!Array.isArray(rows)) return result;
+  for (const row of rows) {
+    const canonical = SYNONYMS.get(String(row?.term || '').trim()) || String(row?.term || '').trim();
+    const dimension = String(row?.dimension || '').trim();
+    const evidence = String(row?.evidence || '').trim();
+    if (!canonical || !ALLOWED_DIMENSIONS.has(dimension) || !evidence) continue;
+    const existing = byTerm.get(canonical);
+    if (existing) {
+      existing.weight = Math.min(100, Math.max(existing.weight, Number(row.weight) || 50));
+      existing.confidence = Math.min(98, Math.max(existing.confidence, Number(row.confidence) || 50));
+      if (!existing.sources.includes('WRITING-LLM')) existing.sources.push('WRITING-LLM');
+      if (!existing.evidence.includes(evidence)) existing.evidence.push(evidence.slice(0, 240));
+      continue;
+    }
+    const item = {
+      tagId: `TERM-${advisorId}-${String(result.length + 1).padStart(2, '0')}`, advisorId, term: canonical.slice(0, 20), label: canonical.slice(0, 20),
+      dimension, weight: Math.max(0, Math.min(100, Number(row.weight) || 50)), confidence: Math.max(0, Math.min(100, Number(row.confidence) || 50)),
+      sources: ['WRITING-LLM'], sourceRefs: ['WRITING-LLM'], evidence: [evidence.slice(0, 240)], source: '短文模型分析', status: '候选', simulation: true,
+    };
+    result.push(item);
+    byTerm.set(canonical, item);
+    if (result.length >= 50) break;
+  }
+  return result;
 }
