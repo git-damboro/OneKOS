@@ -4,12 +4,12 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createAppServer } from '../server.mjs';
+import { createAppServer, createProductionServer } from '../server.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-async function withServer(run) {
-  const server = createAppServer();
+async function withServer(run, options = {}) {
+  const server = createAppServer(options);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     await run(`http://127.0.0.1:${server.address().port}`);
@@ -42,4 +42,23 @@ test('生产入口默认监听云平台可访问的网络接口', async () => {
   const source = await readFile(path.join(root, 'server.mjs'), 'utf8');
 
   assert.match(source, /server\.listen\(port, process\.env\.HOST \|\| '0\.0\.0\.0'/);
+});
+
+test('forwards Feishu auth runtime to the login route', async () => {
+  const { server } = createProductionServer({
+    env: {
+      FEISHU_APP_ID: 'cli_test',
+      FEISHU_APP_SECRET: 'secret',
+      FEISHU_OAUTH_REDIRECT_URI: 'https://onekos.example/auth/feishu/callback',
+    },
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const response = await fetch(`${baseUrl}/auth/feishu/login`, { redirect: 'manual' });
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get('location'), /accounts\.feishu\.cn\/open-apis\/authen\/v1\/authorize/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

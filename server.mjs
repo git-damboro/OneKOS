@@ -30,7 +30,7 @@ function resolveRequestPath(requestUrl) {
 }
 export function createAppServer(options = {}) {
   const runtime = options.service
-    ? { service: options.service, runtimeStatus: options.runtimeStatus || { mode: 'simulation', simulation: true, warnings: [] } }
+    ? { ...options, runtimeStatus: options.runtimeStatus || { mode: 'simulation', simulation: true, warnings: [] } }
     : createOneKosRuntime({ env: options.env, fetchImpl: options.fetchImpl });
   const handleApiRequest = createApiHandler(runtime);
   return http.createServer(async (request, response) => {
@@ -60,11 +60,15 @@ export function createAppServer(options = {}) {
   });
 }
 
+export function createProductionServer(options = {}) {
+  const runtime = createOneKosRuntime(options);
+  return { runtime, server: createAppServer(runtime) };
+}
+
 const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
 if (entryPath === fileURLToPath(import.meta.url)) {
   try { process.loadEnvFile(path.join(ROOT, '.env')); } catch {}
-  const runtime = createOneKosRuntime();
-  const server = createAppServer({ service: runtime.service, runtimeStatus: runtime.runtimeStatus });
+  const { runtime, server } = createProductionServer();
   const port = runtime.config.port;
   server.listen(port, process.env.HOST || '0.0.0.0', () => {
     console.log(`OneKOS MVP running on port ${port}`);
