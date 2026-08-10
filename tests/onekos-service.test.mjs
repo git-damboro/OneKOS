@@ -12,6 +12,7 @@ function createService(options = {}) {
       repository,
       mode: options.mode || 'simulation',
       llmClient: options.llmClient || null,
+      videoEditor: options.videoEditor || null,
       clock: () => new Date('2026-08-04T02:00:00.000Z'),
       idFactory: options.idFactory || (() => 'ONB-TEST-001'),
     }),
@@ -192,6 +193,109 @@ test('顾问上传一个真实素材后立即检查并重新组装 JSON3', async
   assert.equal(result.status, 'waiting_upload');
   assert.equal(result.json3.uploadedAssets.find((asset) => asset.slotId === requirement.slotId).fileName, 'opening.mp4');
   assert.equal(repository.snapshot().advisorAssets.find((asset) => asset.slotId === requirement.slotId).technicalCheckStatus, '检查通过');
+});
+
+test('素材可以先保存为检查中，再由后台独立完成检查', async () => {
+  const { service, repository } = createService();
+  const generation = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-ASYNC-001' });
+  const requirement = generation.shootingRequirements[0];
+  const input = {
+    contentId: generation.content.contentId,
+    slotId: requirement.slotId,
+    advisorId: 'ADV-017',
+    fileName: 'opening.mp4',
+    mimeType: 'video/mp4',
+    bytes: new Uint8Array([1, 2, 3]),
+    durationSec: Math.max(9, requirement.minDurationSec),
+    width: 1080,
+    height: 1920,
+  };
+
+  const staged = await service.stageAdvisorAssetUpload(input);
+  assert.equal(staged.status, 'checking');
+  assert.equal(staged.uploadedAsset.status, 'checking');
+  assert.equal(repository.snapshot().advisorAssets.find((asset) => asset.slotId === requirement.slotId).technicalCheckStatus, '检查中');
+
+  const checked = await service.checkAdvisorAsset(input);
+  assert.equal(checked.checkedAsset.status, 'available');
+  assert.equal(repository.snapshot().advisorAssets.find((asset) => asset.slotId === requirement.slotId).technicalCheckStatus, '检查通过');
+});
+
+test('后端 FFprobe 元数据优先于浏览器上报值', async () => {
+  const videoEditor = {
+    async inspectBytes() { return { durationSec: 1, width: 640, height: 360, hasVideo: true, hasAudio: true }; },
+  };
+  const { service } = createService({ videoEditor });
+  const generation = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-PROBE-001' });
+  const requirement = generation.shootingRequirements[0];
+  const result = await service.uploadAdvisorAsset({
+    contentId: generation.content.contentId, slotId: requirement.slotId, advisorId: 'ADV-017',
+    fileName: 'too-short.mp4', mimeType: 'video/mp4', bytes: new Uint8Array([1, 2, 3]),
+    durationSec: 99, width: 1080, height: 1920,
+  });
+
+  assert.equal(result.checkedAsset.durationSec, 1);
+  assert.equal(result.checkedAsset.width, 640);
+  assert.equal(result.checkedAsset.status, 'invalid');
+  assert.match(result.checkedAsset.invalidReason, /时长至少需要|短边至少需要|画面方向/);
+});
+
+test('素材齐全后创建剪辑任务并把预览成片写回', async () => {
+  const videoEditor = {
+    async checkAvailability() { return { available: true }; },
+    async render({ job, assets, getAssetBytes, onProgress }) {
+      assert.equal(assets.length, job.assetIds.length);
+      assert.ok((await getAssetBytes(assets[0])).byteLength > 0);
+      await onProgress(70);
+      return { fileName: 'preview.mp4', mimeType: 'video/mp4', bytes: new Uint8Array([7, 8, 9]), size: 3, durationSec: 30, outputPath: 'preview.mp4' };
+    },
+    async readOutput() { return new Uint8Array([7, 8, 9]); },
+  };
+  const { service, repository } = createService({ videoEditor });
+  const generation = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-RENDER-001' });
+  let uploadResult;
+  for (const requirement of generation.shootingRequirements) {
+    uploadResult = await service.uploadAdvisorAsset({
+      contentId: generation.content.contentId, slotId: requirement.slotId, advisorId: 'ADV-017',
+      fileName: `${requirement.slotId}.mp4`, mimeType: 'video/mp4', bytes: new Uint8Array([1, 2, 3]),
+      durationSec: Math.max(requirement.suggestedDurationSec, requirement.minDurationSec), width: 1080, height: 1920,
+    });
+  }
+
+  assert.equal(uploadResult.comparison.complete, true);
+  assert.equal(uploadResult.editingJob.status, '待剪辑');
+  const completed = await service.executeEditingJob(uploadResult.editingJob.editingJobId);
+  assert.equal(completed.status, '待顾问预览');
+  assert.equal(completed.progress, 100);
+  assert.match(completed.previewFileToken, /^sim-render-/);
+  assert.equal((await repository.getEditingJob(completed.editingJobId)).status, '待顾问预览');
+});
+
+test('同一剪辑任务并发启动时只允许一个请求进入 FFmpeg 准备阶段', async () => {
+  const repository = new SimulationOneKosRepository({
+    editingJobs: [{
+      editingJobId: 'CONTENT-LOCK-001-RENDER-001', contentId: 'CONTENT-LOCK-001', assetIds: [],
+      editingPlan: { shots: [] }, status: '待剪辑', progress: 0, retryCount: 0,
+    }],
+  });
+  let releaseAvailability;
+  let availabilityChecks = 0;
+  const availability = new Promise((resolve) => { releaseAvailability = resolve; });
+  const service = new OneKosService({
+    repository,
+    videoEditor: {
+      async checkAvailability() { availabilityChecks += 1; await availability; },
+    },
+  });
+  service.executeEditingJob = async () => ({ status: '待顾问预览' });
+
+  const first = service.startEditingJob('CONTENT-LOCK-001-RENDER-001');
+  const duplicate = await service.startEditingJob('CONTENT-LOCK-001-RENDER-001');
+  assert.equal(duplicate.status, '待剪辑');
+  assert.equal(availabilityChecks, 1);
+  releaseAvailability();
+  await first;
+  assert.equal(availabilityChecks, 1);
 });
 
 test('评论转 A 级线索并创建待确认反馈事件', async () => {

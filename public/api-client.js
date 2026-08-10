@@ -76,6 +76,10 @@ export const oneKosApi = {
       method: 'POST', body: form, timeoutMs: 120_000,
     });
   },
+  startEditingJob: (editingJobId) => request(`/api/editing/jobs/${encodeURIComponent(editingJobId)}/start`, {
+    method: 'POST', body: {}, timeoutMs: 20_000,
+  }),
+  getEditingJob: (editingJobId) => request(`/api/editing/jobs/${encodeURIComponent(editingJobId)}`, { timeoutMs: 20_000 }),
   analyzeComment: (input) => request('/api/comments/analyze', { method: 'POST', body: input }),
   confirmFeedback: (eventId) => request(`/api/feedback/${encodeURIComponent(eventId)}/confirm`, { method: 'POST', body: {} }),
 };

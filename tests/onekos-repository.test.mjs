@@ -212,3 +212,26 @@ test('飞书仓库更新旧版顾问时不提交不存在的可选画像字段',
   assert.equal('初始化状态' in writtenFields, false);
 });
 
+test('剪辑完成写回附件、Token 与飞书毫秒时间', async () => {
+  let writtenFields;
+  const client = {
+    async upsertByField(tableId, field, value, fields) {
+      writtenFields = fields;
+      return { action: 'created', record: { record_id: 'rec-render', fields } };
+    },
+  };
+  const repository = new FeishuOneKosRepository({ client, tableIds: { editingJobs: 'tbl-editing' } });
+  await repository.saveEditingJob({
+    editingJobId: 'RENDER-001', contentId: 'CONTENT-001', contentVersion: 1, assetIds: ['ASSET-001'],
+    editingPlan: { shots: [] }, editor: '本地 FFmpeg', status: '待顾问预览', progress: 100,
+    failureReason: '', retryCount: 0, previewFileToken: 'box-preview', finalFileToken: null,
+    advisorConfirmationStatus: '待确认', completedAt: '2026-08-10T06:00:00.000Z', simulation: false,
+  });
+
+  assert.deepEqual(writtenFields.预览视频, [{ file_token: 'box-preview' }]);
+  assert.equal(writtenFields.预览视频Token, 'box-preview');
+  assert.equal(writtenFields.最终视频, undefined);
+  assert.equal(writtenFields.完成时间, Date.parse('2026-08-10T06:00:00.000Z'));
+  assert.equal(writtenFields.模拟数据, '否');
+});
+

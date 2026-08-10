@@ -47,6 +47,7 @@ function initialState() {
     content: null,
     materialsConfirmed: false,
     materialComparison: null,
+    editingJob: null,
     matrixResolved: false,
     matrix: null,
     quality: null,
@@ -58,6 +59,7 @@ function initialState() {
     backendState: null,
     apiError: '',
     busy: '',
+    materialOperations: {},
     currentAdvisorId: 'ADV-017',
     currentTaskId: 'TASK-001',
     onboarding: {
@@ -84,6 +86,12 @@ const drawer = document.querySelector('#guide-drawer');
 const drawerMask = document.querySelector('#drawer-mask');
 const toast = document.querySelector('#toast');
 const runtimeStatus = document.querySelector('#runtime-status');
+const materialFileInput = document.createElement('input');
+materialFileInput.type = 'file';
+materialFileInput.className = 'material-file-picker';
+materialFileInput.setAttribute('aria-hidden', 'true');
+document.body.append(materialFileInput);
+let selectedMaterialSlotId = '';
 
 const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value);
 const compact = (value) => value >= 10000 ? `${(value / 10000).toFixed(1)}万` : fmt(value);
@@ -330,10 +338,16 @@ function renderStudio() {
     </div>
     <section class="card storyboard"><div class="card-head"><div><span class="eyebrow">STORYBOARD</span><h3>分镜＋字幕＋剪辑时间轴</h3></div><span class="pill">竖屏 9:16 · 约 65 秒</span></div><div class="shot-grid">${c.storyboard.map((shot, index) => `<article><b>0${index + 1}</b><span>${shot.time}</span><strong>${shot.shot}</strong><p>字幕：${shot.subtitle}</p></article>`).join('')}</div><div class="timeline">${c.editTimeline.map((item) => `<span>${item}</span>`).join('')}</div></section>
     <div class="layout two-one">
-      <section class="card material-card"><div class="card-head"><div><span class="eyebrow">MATERIALS</span><h3>顾问只需补充这些真实素材</h3></div><span class="pill">${state.materialComparison ? `${state.materialComparison.matchedCount}/${state.materialComparison.requiredCount} 已通过` : '上传后自动检查'}</span></div>${c.materials.map((item, index) => `<div class="material-row material-upload-row ${item.checkState}"><i>${item.checkState === 'passed' ? '✓' : item.checkState === 'failed' ? '!' : index + 1}</i><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.guide)}</span><small>${escapeHtml(item.status)}</small></div><label class="material-upload-button ${state.busy === item.slotId ? 'busy' : ''}">${state.busy === item.slotId ? '检查中…' : item.fileName ? '替换素材' : '上传素材'}<input type="file" data-material-upload data-slot-id="${escapeHtml(item.slotId)}" accept="${item.accept}" ${state.busy ? 'disabled' : ''}></label></div>`).join('')}</section>
+      <section class="card material-card"><div class="card-head"><div><span class="eyebrow">MATERIALS</span><h3>顾问只需补充这些真实素材</h3></div><span class="pill">${state.materialComparison ? `${state.materialComparison.matchedCount}/${state.materialComparison.requiredCount} 已通过` : '上传后后台检查'}</span></div>${c.materials.map((item, index) => {
+        const operation = state.materialOperations[item.slotId] || (item.checkState === 'checking' ? 'checking' : '');
+        const operationLabel = operation === 'uploading' ? '上传中…' : operation === 'checking' ? '后台检查中…' : item.fileName ? '替换素材' : '上传素材';
+        const icon = item.checkState === 'passed' ? '✓' : item.checkState === 'failed' ? '!' : item.checkState === 'checking' ? '…' : index + 1;
+        return `<div class="material-row material-upload-row ${item.checkState}"><i>${icon}</i><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.guide)}</span><small>${escapeHtml(item.status)}</small></div><button class="material-upload-button ${operation ? 'busy' : ''}" data-action="select-material" data-slot-id="${escapeHtml(item.slotId)}" data-accept="${item.accept}" ${operation ? 'disabled' : ''}>${operationLabel}</button></div>`;
+      }).join('')}</section>
       <aside class="card cover-card"><span>封面建议</span><strong>${c.cover}</strong><small>大字不超过 10 个字，保留真实车辆或门店画面</small><h4>评论预案</h4>${c.replyPlan.map((item) => `<p>• ${item}</p>`).join('')}</aside>
     </div>
-    <div class="sticky-next"><div><span>素材准备状态</span><strong>${state.materialsConfirmed ? '所有必填素材已通过代码检查' : '按镜头上传，每上传一个都会自动检查'}</strong></div><button class="primary" data-page="quality">查看内容质检 →</button></div>`;
+    ${state.editingJob ? `<section class="card editing-card"><div class="card-head"><div><span class="eyebrow">LOCAL FFMPEG</span><h3>视频剪辑任务</h3></div><span class="pill">${escapeHtml(state.editingJob.status)} · ${Number(state.editingJob.progress) || 0}%</span></div><div class="editing-progress"><i style="width:${Math.max(0, Math.min(100, Number(state.editingJob.progress) || 0))}%"></i></div>${state.editingJob.failureReason ? `<p class="editing-error">${escapeHtml(state.editingJob.failureReason)}</p>` : ''}${['待顾问预览','已完成'].includes(state.editingJob.status) ? `<video class="editing-preview" controls preload="metadata" src="/api/editing/jobs/${encodeURIComponent(state.editingJob.editingJobId)}/preview?v=${encodeURIComponent(state.editingJob.completedAt || state.editingJob.previewFileToken || '1')}"></video>` : ''}</section>` : ''}
+    <div class="sticky-next"><div><span>${state.materialsConfirmed ? '素材已齐全' : '素材准备状态'}</span><strong>${state.editingJob ? `剪辑任务：${escapeHtml(state.editingJob.status)}` : state.materialsConfirmed ? '已形成 JSON3，可以生成预览视频' : '按镜头上传，每上传一个都会自动检查'}</strong></div>${state.materialsConfirmed && state.editingJob ? `<button class="primary" data-action="start-editing" ${state.busy === 'editing' || state.editingJob.status === '剪辑中' ? 'disabled' : ''}>${['待顾问预览','已完成'].includes(state.editingJob.status) ? '重新生成预览' : state.editingJob.status === '失败' ? '重试剪辑' : '生成预览视频'} →</button>` : `<button class="primary" data-page="quality">查看内容质检 →</button>`}</div>`;
 }
 
 function scoreCard(label, value, detail) {
@@ -451,9 +465,9 @@ function apiContentToLegacy(content, requirements = [], assets = []) {
         slotId: requirement.slotId,
         label: requirement.description || requirement.visualDescription,
         guide: requirement.shootingGuide,
-        status: asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
+        status: asset?.status === 'checking' ? '素材已上传，正在后台自动检查' : asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
         fileName: asset?.fileName || '',
-        checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : 'waiting',
+        checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : asset?.status === 'checking' ? 'checking' : 'waiting',
         accept: ({ video: 'video/*', image: 'image/*', audio: 'audio/*', text: 'text/plain' })[requirement.type] || '*/*',
       };
     }) : materials.map((label, index) => ({ slotId: `legacy-${index}`, label, guide: '按拍摄要求补充真实素材。', status: '待顾问补充', fileName: '', checkState: 'waiting', accept: '*/*' })),
@@ -470,14 +484,15 @@ function applyMaterialResult(data) {
       slotId: requirement.slotId,
       label: requirement.description || requirement.visualDescription,
       guide: requirement.shootingGuide,
-      status: asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
+      status: asset?.status === 'checking' ? '素材已上传，正在后台自动检查' : asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
       fileName: asset?.fileName || '',
-      checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : 'waiting',
+      checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : asset?.status === 'checking' ? 'checking' : 'waiting',
       accept: ({ video: 'video/*', image: 'image/*', audio: 'audio/*', text: 'text/plain' })[requirement.type] || '*/*',
     };
   });
   state.materialComparison = data.comparison;
   state.materialsConfirmed = data.comparison.complete;
+  if (data.editingJob) state.editingJob = data.editingJob;
 }
 
 function applyContentPackage(data) {
@@ -492,6 +507,7 @@ function applyContentPackage(data) {
     matched: [],
   };
   state.materialsConfirmed = state.materialComparison.complete;
+  state.editingJob = data.editingJob || null;
   const quality = data.quality || data.content?.quality;
   if (quality) {
     state.quality = apiQualityToLegacy(quality);
@@ -511,6 +527,34 @@ async function recoverContentPackage(contentId, attempts = 12, delayMs = 5_000) 
     }
   }
   throw lastError;
+}
+
+async function pollMaterialCheck(contentId, slotId, attempts = 90, delayMs = 1_000) {
+  let lastPayload;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const payload = await oneKosApi.getContentMaterials(contentId);
+    lastPayload = payload;
+    const asset = payload.data.json3?.uploadedAssets?.find((item) => item.slotId === slotId);
+    applyMaterialResult(payload.data);
+    render();
+    if (asset && ['available', 'invalid'].includes(asset.status)) return { payload, asset };
+    if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  const error = new Error('后台检查仍在进行，请稍后刷新内容创作室查看结果');
+  error.payload = lastPayload;
+  throw error;
+}
+
+async function pollEditingJob(editingJobId, attempts = 180, delayMs = 2_000) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const payload = await oneKosApi.getEditingJob(editingJobId);
+    state.runtime = payload.runtime;
+    state.editingJob = payload.data;
+    render();
+    if (['待顾问预览', '已完成', '失败'].includes(payload.data.status)) return payload.data;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error('剪辑仍在后台运行，请稍后刷新内容创作室查看');
 }
 
 function apiLeadToLegacy(lead, sourceUser = '模拟用户') {
@@ -785,6 +829,13 @@ document.addEventListener('click', async (event) => {
     drawer.classList.remove('open');
     drawerMask.classList.remove('open');
     drawer.setAttribute('aria-hidden', 'true');
+  } else if (action === 'select-material') {
+    const slotId = target.dataset.slotId;
+    if (!slotId || state.materialOperations[slotId]) return;
+    selectedMaterialSlotId = slotId;
+    materialFileInput.accept = target.dataset.accept || '*/*';
+    materialFileInput.value = '';
+    materialFileInput.click();
   } else if (action === 'select-advisor') {
     const advisor = state.onboarding.advisors.find((item) => item.advisorId === target.dataset.advisorId);
     if (!advisor) return;
@@ -1056,6 +1107,29 @@ document.addEventListener('click', async (event) => {
     } catch {
       showToast('浏览器未授予剪贴板权限', 'warning');
     }
+  } else if (action === 'start-editing') {
+    if (state.busy === 'editing') return;
+    if (!state.editingJob?.editingJobId || !state.materialsConfirmed) {
+      showToast('请先补齐并通过所有必填素材检查', 'warning');
+      return;
+    }
+    state.busy = 'editing';
+    render();
+    showToast('剪辑任务已提交，正在下载飞书素材并生成预览…');
+    try {
+      const started = await oneKosApi.startEditingJob(state.editingJob.editingJobId);
+      state.editingJob = started.data;
+      render();
+      const completed = await pollEditingJob(state.editingJob.editingJobId);
+      const succeeded = ['待顾问预览', '已完成'].includes(completed.status);
+      showToast(succeeded ? '预览视频已生成并写回飞书，等待顾问确认' : `剪辑失败：${completed.failureReason}`, succeeded ? 'success' : 'warning');
+    } catch (error) {
+      showToast(`剪辑任务失败：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+      render();
+      updateRuntimeBadge();
+    }
   } else if (action === 'resolve-matrix') {
     state.matrixResolved = true;
     state.matrix = inspectMatrix(state.content, true);
@@ -1125,20 +1199,20 @@ document.addEventListener('click', async (event) => {
 });
 
 document.addEventListener('change', async (event) => {
-  const input = event.target.closest('[data-material-upload]');
-  if (!input) return;
-  const file = input.files?.[0];
-  const slotId = input.dataset.slotId;
+  if (event.target !== materialFileInput) return;
+  const file = materialFileInput.files?.[0];
+  const slotId = selectedMaterialSlotId;
+  selectedMaterialSlotId = '';
+  materialFileInput.value = '';
   if (!file || !slotId || !state.content) return;
   if (file.size > 20 * 1024 * 1024) {
     showToast('单个素材暂时不能超过 20MB', 'warning');
-    input.value = '';
     return;
   }
 
-  state.busy = slotId;
+  state.materialOperations[slotId] = 'uploading';
   render();
-  showToast(`正在上传并检查 ${file.name}…`);
+  showToast(`正在上传 ${file.name}；上传后会在后台检查…`);
   try {
     const metadata = await readMediaMetadata(file);
     const payload = await oneKosApi.uploadAsset(state.content.contentId, slotId, {
@@ -1148,14 +1222,18 @@ document.addEventListener('change', async (event) => {
     });
     state.runtime = payload.runtime;
     applyMaterialResult(payload.data);
-    const result = payload.data.checkedAsset;
+    state.materialOperations[slotId] = 'checking';
+    render();
+    showToast(`${file.name} 已保存到飞书，后台检查已开始`, 'success');
+    const { payload: checkedPayload, asset: result } = await pollMaterialCheck(state.content.contentId, slotId);
+    state.runtime = checkedPayload.runtime;
     showToast(result.status === 'available'
-      ? `素材已保存到飞书并通过检查${payload.data.comparison.complete ? '，必填素材已齐全' : ''}`
-      : `素材已保存，但需要重拍：${result.invalidReason}`, result.status === 'available' ? 'success' : 'warning');
+      ? `素材检查通过${checkedPayload.data.comparison.complete ? '，必填素材已齐全' : ''}`
+      : `素材需要重拍：${result.invalidReason}`, result.status === 'available' ? 'success' : 'warning');
   } catch (error) {
-    showToast(`素材上传或检查失败：${error.message}`, 'warning');
+    showToast(`素材处理失败：${error.message}`, 'warning');
   } finally {
-    state.busy = '';
+    delete state.materialOperations[slotId];
     render();
     updateRuntimeBadge();
   }

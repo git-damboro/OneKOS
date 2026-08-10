@@ -6,6 +6,7 @@ import { OpenAICompatibleClient } from './llm-client.mjs';
 import { FeishuOneKosRepository, SimulationOneKosRepository } from './onekos-repository.mjs';
 import { OneKosService } from './onekos-service.mjs';
 import { createRuntimeConfig, toPublicRuntimeStatus } from './runtime-config.mjs';
+import { LocalFfmpegVideoEditor } from './video-editor.mjs';
 
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -24,7 +25,12 @@ export function createOneKosRuntime({ env = process.env, fetchImpl = globalThis.
   return {
     config,
     runtimeStatus: toPublicRuntimeStatus(config),
-    service: new OneKosService({ repository, llmClient, mode: config.mode }),
+    service: new OneKosService({
+      repository,
+      llmClient,
+      mode: config.mode,
+      videoEditor: new LocalFfmpegVideoEditor(config.video),
+    }),
   };
 }
 
@@ -239,11 +245,84 @@ export function createApiHandler({ service, runtimeStatus }) {
       }
       const assetUploadMatch = request.method === 'POST' && url.pathname.match(/^\/api\/content\/([^/]+)\/assets\/([^/]+)$/);
       if (assetUploadMatch) {
-        const data = await service.uploadAdvisorAsset({
+        const upload = {
           contentId: decodeURIComponent(assetUploadMatch[1]),
           slotId: decodeURIComponent(assetUploadMatch[2]),
           ...await readAssetUpload(request),
+        };
+        const data = service.stageAdvisorAssetUpload
+          ? await service.stageAdvisorAssetUpload(upload)
+          : await service.uploadAdvisorAsset(upload);
+        sendJson(response, service.stageAdvisorAssetUpload ? 202 : 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        if (service.stageAdvisorAssetUpload && service.checkAdvisorAsset) {
+          setImmediate(() => {
+            service.checkAdvisorAsset(upload).catch(async (error) => {
+              console.error(`[material-check] ${upload.contentId}/${upload.slotId}:`, error);
+              if (service.failAdvisorAssetCheck) {
+                await service.failAdvisorAssetCheck({
+                  contentId: upload.contentId,
+                  slotId: upload.slotId,
+                  message: error.message,
+                }).catch((writeError) => console.error('[material-check] 写入失败状态时出错：', writeError));
+              }
+            });
+          });
+        }
+        return true;
+      }
+      const editingJobStartMatch = request.method === 'POST' && url.pathname.match(/^\/api\/editing\/jobs\/([^/]+)\/start$/);
+      if (editingJobStartMatch) {
+        await readJsonBody(request);
+        const data = await service.startEditingJob(decodeURIComponent(editingJobStartMatch[1]));
+        sendJson(response, 202, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const editingPreviewMatch = request.method === 'GET' && url.pathname.match(/^\/api\/editing\/jobs\/([^/]+)\/preview$/);
+      if (editingPreviewMatch) {
+        const bytes = await service.getEditingPreview(decodeURIComponent(editingPreviewMatch[1]));
+        const total = bytes.byteLength;
+        const rangeHeader = request.headers.range;
+        let statusCode = 200;
+        let start = 0;
+        let end = total - 1;
+        if (rangeHeader) {
+          const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+          if (!match || (!match[1] && !match[2])) {
+            response.writeHead(416, { 'Content-Range': `bytes */${total}`, 'Accept-Ranges': 'bytes', 'X-Request-Id': requestId });
+            response.end();
+            return true;
+          }
+          if (!match[1]) {
+            const suffixLength = Number(match[2]);
+            start = Math.max(0, total - suffixLength);
+          } else {
+            start = Number(match[1]);
+          }
+          end = match[2] && match[1] ? Math.min(Number(match[2]), total - 1) : total - 1;
+          if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= total || end < start) {
+            response.writeHead(416, { 'Content-Range': `bytes */${total}`, 'Accept-Ranges': 'bytes', 'X-Request-Id': requestId });
+            response.end();
+            return true;
+          }
+          statusCode = 206;
+        }
+        const body = bytes.subarray(start, end + 1);
+        response.writeHead(statusCode, {
+          'Content-Type': 'video/mp4',
+          'Content-Length': String(body.byteLength),
+          'Accept-Ranges': 'bytes',
+          ...(statusCode === 206 ? { 'Content-Range': `bytes ${start}-${end}/${total}` } : {}),
+          'Cache-Control': 'no-store',
+          'Content-Disposition': 'inline; filename="onekos-preview.mp4"',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Request-Id': requestId,
         });
+        response.end(Buffer.from(body));
+        return true;
+      }
+      const editingJobMatch = request.method === 'GET' && url.pathname.match(/^\/api\/editing\/jobs\/([^/]+)$/);
+      if (editingJobMatch) {
+        const data = await service.getEditingJob(decodeURIComponent(editingJobMatch[1]));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }
