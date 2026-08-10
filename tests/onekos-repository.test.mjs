@@ -143,6 +143,76 @@ test('Feishu repository preserves quiz session state across round trip', async (
   assert.equal(restored.currentQuestionId, 'Q-AUDIENCE');
 });
 
+test('Feishu repository falls back when profile tag V1 fields are missing', async () => {
+  const upserts = [];
+  const client = {
+    async upsertByField(tableId, field, value, fields) {
+      upserts.push({ tableId, field, value, fields });
+      if ('画像版本' in fields || '来源引用' in fields) throw new Error('飞书 OpenAPI 错误：FieldNameNotFound');
+      return { action: 'created', record: { record_id: `rec-${value}`, fields } };
+    },
+    async findRecordByField() { return null; },
+    async listRecords() { return []; },
+  };
+  const repository = new FeishuOneKosRepository({
+    client,
+    tableIds: {
+      advisors: 'tbl-advisors', profileTags: 'tbl-tags', brandKnowledge: 'tbl-knowledge',
+      contentTasks: 'tbl-tasks', contentResults: 'tbl-results', commentLeads: 'tbl-leads',
+      feedbackEvents: 'tbl-events', onboardingSessions: 'tbl-onboarding',
+    },
+  });
+
+  const write = await repository.saveProfileTag({
+    tagId: 'TAG-FEISHU-001', advisorId: 'ADV-FEISHU-001', profileVersion: 1, dimension: '内容形式',
+    label: '实测内容', status: '生效', confidence: 92, weight: 88, source: '问卷答题',
+    sourceRefs: ['QUIZ-001'], evidence: ['选择：实测路线'], updatedAt: '2026-08-09T01:00:00.000Z', simulation: false,
+  });
+
+  assert.equal(write.action, 'created');
+  assert.equal(upserts.length, 2);
+  assert.equal('画像版本' in upserts[0].fields, true);
+  assert.equal('来源引用' in upserts[0].fields, true);
+  assert.equal('画像版本' in upserts[1].fields, false);
+  assert.equal('来源引用' in upserts[1].fields, false);
+});
+
+test('Feishu repository falls back when content task decision fields are missing', async () => {
+  const upserts = [];
+  const client = {
+    async upsertByField(tableId, field, value, fields) {
+      upserts.push({ tableId, field, value, fields });
+      if ('路由时间' in fields || '顾问决策' in fields || '拒绝原因' in fields || '决策时间' in fields) throw new Error('飞书 OpenAPI 错误：FieldNameNotFound');
+      return { action: 'created', record: { record_id: `rec-${value}`, fields } };
+    },
+    async findRecordByField() { return null; },
+    async listRecords() { return []; },
+  };
+  const repository = new FeishuOneKosRepository({
+    client,
+    tableIds: {
+      advisors: 'tbl-advisors', profileTags: 'tbl-tags', brandKnowledge: 'tbl-knowledge',
+      contentTasks: 'tbl-tasks', contentResults: 'tbl-results', commentLeads: 'tbl-leads',
+      feedbackEvents: 'tbl-events', onboardingSessions: 'tbl-onboarding',
+    },
+  });
+
+  const write = await repository.saveContentTask({
+    taskId: 'TASK-FEISHU-001', advisorId: 'ADV-FEISHU-001', targetModel: '乐道 L60',
+    userQuestion: '用户最关心的问题是什么？', topic: '上海实测首条任务', routeScore: 80,
+    matrixGap: '新顾问首条真实场景内容', profileEvidence: ['TAG-FEISHU-001'], taskDate: '2026-08-09',
+    status: '待生成', routedAt: '2026-08-09T01:00:00.000Z', decision: 'accept', rejectionReason: '', decidedAt: '',
+    simulation: false,
+  });
+
+  assert.equal(write.action, 'created');
+  assert.equal(upserts.length, 2);
+  assert.equal('路由时间' in upserts[0].fields, true);
+  assert.equal('顾问决策' in upserts[0].fields, true);
+  assert.equal('路由时间' in upserts[1].fields, false);
+  assert.equal('顾问决策' in upserts[1].fields, false);
+});
+
 test('飞书仓库映射顾问、标签与首条任务的画像版本字段', async () => {
   const upserts = [];
   const client = {

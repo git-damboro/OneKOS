@@ -161,6 +161,17 @@ function restoreOnboardingSnapshot(snapshot) {
   };
 }
 
+function isMissingFieldError(error) {
+  const details = error?.details ? JSON.stringify(error.details) : '';
+  return `${error?.message || ''} ${details}`.includes('FieldNameNotFound');
+}
+
+function omitFields(fields, names) {
+  const next = { ...fields };
+  for (const name of names) delete next[name];
+  return next;
+}
+
 function mapAdvisor(record) {
   const f = record.fields;
   return {
@@ -313,6 +324,15 @@ export class FeishuOneKosRepository {
     this.tableIds = tableIds;
   }
 
+  async upsertByField(tableId, keyField, keyValue, fields, optionalFieldFallback = []) {
+    try {
+      return await this.client.upsertByField(tableId, keyField, keyValue, fields);
+    } catch (error) {
+      if (!optionalFieldFallback.length || !isMissingFieldError(error)) throw error;
+      return this.client.upsertByField(tableId, keyField, keyValue, omitFields(fields, optionalFieldFallback));
+    }
+  }
+
   async find(table, field, value) {
     return this.client.findRecordByField(this.tableIds[table], field, value);
   }
@@ -462,7 +482,7 @@ export class FeishuOneKosRepository {
       画像证据ID: (task.profileEvidence || []).join('｜'), 任务日期: task.taskDate,
       状态: task.status, 路由时间: task.routedAt || '', 顾问决策: task.decision || '', 拒绝原因: task.rejectionReason || '', 决策时间: task.decidedAt || '', 模拟数据: task.simulation ? '是' : '否',
     };
-    const result = await this.client.upsertByField(this.tableIds.contentTasks, '任务ID', task.taskId, fields);
+    const result = await this.upsertByField(this.tableIds.contentTasks, '任务ID', task.taskId, fields, ['路由时间', '顾问决策', '拒绝原因', '决策时间']);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
 
@@ -604,7 +624,7 @@ export class FeishuOneKosRepository {
 
   async saveProfileTag(tag) {
     const fields = { 标签ID: tag.tagId, 顾问ID: tag.advisorId, 画像版本: tag.profileVersion, 维度: tag.dimension, 标签: tag.label, 状态: tag.status, 置信度: tag.confidence, 权重: tag.weight, 来源: tag.source, 来源引用: (tag.sourceRefs || []).join('｜'), 证据: tag.evidence, 更新时间: tag.updatedAt, 模拟数据: tag.simulation ? '是' : '否' };
-    const result = await this.client.upsertByField(this.tableIds.profileTags, '标签ID', tag.tagId, fields);
+    const result = await this.upsertByField(this.tableIds.profileTags, '标签ID', tag.tagId, fields, ['画像版本', '来源引用']);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
 }
