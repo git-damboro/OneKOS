@@ -93,6 +93,56 @@ test('飞书仓库把初始化会话写入独立表并可恢复 JSON 字段', as
   assert.equal(restored.generator, 'local-rule-fallback');
 });
 
+test('Feishu repository preserves quiz session state across round trip', async () => {
+  const records = new Map();
+  const client = {
+    async upsertByField(tableId, field, value, fields) {
+      records.set(`${tableId}:${value}`, { record_id: `rec-${value}`, fields });
+      return { action: 'created', record: records.get(`${tableId}:${value}`) };
+    },
+    async findRecordByField(tableId, field, value) {
+      return records.get(`${tableId}:${value}`) || null;
+    },
+    async listRecords() { return []; },
+  };
+  const repository = new FeishuOneKosRepository({
+    client,
+    tableIds: {
+      advisors: 'tbl-advisors', profileTags: 'tbl-tags', brandKnowledge: 'tbl-knowledge',
+      contentTasks: 'tbl-tasks', contentResults: 'tbl-results', commentLeads: 'tbl-leads',
+      feedbackEvents: 'tbl-events', onboardingSessions: 'tbl-onboarding',
+    },
+  });
+  const session = {
+    sessionId: 'QUIZ-001',
+    advisorId: 'ADV-FEISHU-001',
+    mode: 'quiz',
+    status: 'quiz_active',
+    identity: { displayName: 'Feishu Advisor', city: 'Chengdu', store: 'OneKOS Store' },
+    questionIds: ['Q-PROFESSIONAL', 'Q-AUDIENCE'],
+    adaptiveQuestionIds: [],
+    answers: { 'Q-PROFESSIONAL': 'needs' },
+    currentQuestionId: 'Q-AUDIENCE',
+    candidates: [],
+    acceptedTags: [],
+    writeProgress: {},
+    generator: null,
+    warnings: [],
+    createdAt: '2026-08-09T00:00:00.000Z',
+    updatedAt: '2026-08-09T01:00:00.000Z',
+    simulation: false,
+  };
+
+  await repository.saveOnboardingSession(session);
+  const restored = await repository.getOnboardingSession('QUIZ-001');
+
+  assert.equal(restored.mode, 'quiz');
+  assert.deepEqual(restored.identity, session.identity);
+  assert.deepEqual(restored.questionIds, session.questionIds);
+  assert.deepEqual(restored.answers, session.answers);
+  assert.equal(restored.currentQuestionId, 'Q-AUDIENCE');
+});
+
 test('飞书仓库映射顾问、标签与首条任务的画像版本字段', async () => {
   const upserts = [];
   const client = {

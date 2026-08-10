@@ -135,6 +135,32 @@ function parseJson(value, fallback) {
   try { return JSON.parse(value); } catch { return clone(fallback); }
 }
 
+function onboardingSnapshot(session) {
+  if (session.mode !== 'quiz') return session.input;
+  return {
+    input: session.input || {},
+    mode: 'quiz',
+    identity: session.identity || {},
+    questionIds: session.questionIds || [],
+    adaptiveQuestionIds: session.adaptiveQuestionIds || [],
+    answers: session.answers || {},
+    currentQuestionId: session.currentQuestionId || null,
+  };
+}
+
+function restoreOnboardingSnapshot(snapshot) {
+  if (snapshot?.mode !== 'quiz') return { input: snapshot || {} };
+  return {
+    input: snapshot.input || {},
+    mode: 'quiz',
+    identity: snapshot.identity || {},
+    questionIds: Array.isArray(snapshot.questionIds) ? snapshot.questionIds : [],
+    adaptiveQuestionIds: Array.isArray(snapshot.adaptiveQuestionIds) ? snapshot.adaptiveQuestionIds : [],
+    answers: snapshot.answers && typeof snapshot.answers === 'object' ? snapshot.answers : {},
+    currentQuestionId: snapshot.currentQuestionId || null,
+  };
+}
+
 function mapAdvisor(record) {
   const f = record.fields;
   return {
@@ -358,12 +384,13 @@ export class FeishuOneKosRepository {
     const record = await this.find('onboardingSessions', '会话ID', sessionId);
     if (!record) return null;
     const f = record.fields;
+    const snapshot = restoreOnboardingSnapshot(parseJson(f.输入快照, {}));
     return {
       recordId: record.record_id,
       sessionId: f.会话ID,
       advisorId: f.顾问ID,
       status: f.状态,
-      input: parseJson(f.输入快照, {}),
+      ...snapshot,
       candidates: parseJson(f.候选标签, []),
       acceptedTags: parseJson(f.确认标签, []),
       writeProgress: parseJson(f.写入进度, {}),
@@ -417,7 +444,7 @@ export class FeishuOneKosRepository {
   async saveOnboardingSession(session) {
     const fields = {
       会话ID: session.sessionId, 顾问ID: session.advisorId, 状态: session.status,
-      输入快照: json(session.input), 候选标签: json(session.candidates || []), 确认标签: json(session.acceptedTags || []),
+      输入快照: json(onboardingSnapshot(session)), 候选标签: json(session.candidates || []), 确认标签: json(session.acceptedTags || []),
       写入进度: json(session.writeProgress || {}), 生成方式: session.generator || '',
       警告: json(session.warnings || []), 最近错误: session.lastError || '',
       创建时间: session.createdAt || '', 更新时间: session.updatedAt || '', 确认时间: session.confirmedAt || '',
