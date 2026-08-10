@@ -64,16 +64,21 @@ test('界面展示运行模式并通过服务 API 执行生成、评论和学习
   }
 });
 
-test('内容创作室按素材槽位上传并在每次上传后自动检查', async () => {
+test('内容创作室按素材槽位上传并在后台异步检查', async () => {
   const source = await readFile(path.join(root, 'public', 'app-v2.js'), 'utf8');
   const apiClient = await readFile(path.join(root, 'public', 'api-client.js'), 'utf8');
   const css = await readFile(path.join(root, 'public', 'styles-v2.css'), 'utf8');
 
-  for (const phrase of ['上传后自动检查', 'data-material-upload', 'readMediaMetadata', 'applyMaterialResult']) assert.match(source, new RegExp(phrase));
-  for (const method of ['getContentPackage', 'getContentMaterials', 'uploadAsset']) assert.match(apiClient, new RegExp(method));
+  for (const phrase of ['上传后后台检查', '后台检查中', 'select-material', 'materialFileInput', 'selectedMaterialSlotId', 'readMediaMetadata', 'applyMaterialResult', 'pollMaterialCheck', 'materialOperations']) assert.match(source, new RegExp(phrase));
+  for (const method of ['getContentPackage', 'getContentMaterials', 'uploadAsset', 'startEditingJob', 'getEditingJob']) assert.match(apiClient, new RegExp(method));
   for (const phrase of ['正在生成可拍摄内容包', 'recoverContentPackage', '已从飞书恢复内容包']) assert.match(source, new RegExp(phrase));
   assert.match(apiClient, /timeoutMs: 120_000/);
   assert.match(css, /\.material-upload-button/);
+  assert.match(css, /\.material-file-picker/);
+  assert.match(css, /\.material-upload-row\.checking/);
+  assert.match(source, /生成预览视频/);
+  assert.match(source, /pollEditingJob/);
+  assert.match(css, /\.editing-preview/);
 });
 
 test('画像页提供可恢复的一题一屏问卷和可纠偏词云', async () => {

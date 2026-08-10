@@ -55,6 +55,16 @@ export function createRuntimeConfig(env = process.env) {
       model: env.LLM_MODEL || '',
       timeoutMs: positiveInteger(env.LLM_TIMEOUT_MS, 45_000),
     },
+    video: {
+      ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
+      ffprobePath: env.FFPROBE_PATH || 'ffprobe',
+      workDir: env.VIDEO_WORK_DIR || 'output/video-jobs',
+      width: positiveInteger(env.VIDEO_WIDTH, 720),
+      height: positiveInteger(env.VIDEO_HEIGHT, 1280),
+      fps: positiveInteger(env.VIDEO_FPS, 30),
+      fontDir: env.VIDEO_FONT_DIR || undefined,
+      fontName: env.VIDEO_FONT_NAME || undefined,
+    },
     warnings,
   };
 }
@@ -72,6 +82,10 @@ export function toPublicRuntimeStatus(config) {
     llm: {
       configured: config.llm.configured,
       model: config.llm.model || null,
+    },
+    video: {
+      editor: 'local-ffmpeg',
+      output: `${config.video.width}x${config.video.height}`,
     },
   };
 }

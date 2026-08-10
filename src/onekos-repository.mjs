@@ -42,6 +42,7 @@ export class SimulationOneKosRepository {
   constructor(seed = SIMULATION_DATA) {
     this.data = { ...clone(SIMULATION_DATA), ...clone(seed) };
     this.sequence = 1;
+    this.files = new Map();
   }
 
   snapshot() { return clone(this.data); }
@@ -58,7 +59,22 @@ export class SimulationOneKosRepository {
   async getOnboardingSession(sessionId) { return clone(this.data.onboardingSessions.find((item) => item.sessionId === sessionId) || null); }
   async listShootingRequirements(contentId) { return clone(this.data.shootingRequirements.filter((item) => item.contentId === contentId)); }
   async listAdvisorAssets(contentId) { return clone(this.data.advisorAssets.filter((item) => item.contentId === contentId)); }
-  async uploadAdvisorAssetFile({ fileName }) { return { fileToken: `sim-${Date.now()}-${fileName}`, simulation: true }; }
+  async getEditingJob(editingJobId) { return clone(this.data.editingJobs.find((item) => item.editingJobId === editingJobId) || null); }
+  async uploadAdvisorAssetFile({ fileName, mimeType, bytes }) {
+    const fileToken = `sim-${Date.now()}-${fileName}`;
+    this.files.set(fileToken, { bytes: new Uint8Array(bytes), mimeType });
+    return { fileToken, simulation: true };
+  }
+  async downloadAdvisorAssetFile(fileToken) {
+    const file = this.files.get(fileToken);
+    if (!file) throw new Error(`模拟素材不存在：${fileToken}`);
+    return { ...file, bytes: new Uint8Array(file.bytes) };
+  }
+  async uploadRenderedVideoFile({ fileName, mimeType, bytes }) {
+    const fileToken = `sim-render-${Date.now()}-${fileName}`;
+    this.files.set(fileToken, { bytes: new Uint8Array(bytes), mimeType });
+    return { fileToken, simulation: true };
+  }
 
   async upsert(collection, key, value, record) {
     const index = this.data[collection].findIndex((item) => item[key] === value);
@@ -227,14 +243,41 @@ function mapAdvisorAsset(record) {
   const f = record.fields;
   const attachment = Array.isArray(f.素材文件) ? f.素材文件[0] : null;
   const size = dimensions(f.分辨率);
+  const checkStatus = f.技术检查状态 || '待检查';
   return {
     recordId: record.record_id, assetId: f.素材ID, contentId: f.内容ID, slotId: f.素材槽位ID, shotId: f.镜头ID,
     advisorId: f.顾问ID, fileToken: attachment?.file_token || f.飞书文件Token || null, fileName: attachment?.name || '',
     mimeType: attachment?.type || '', fileSize: Number(attachment?.size) || 0, type: assetType(f.文件类型 || attachment?.type),
     durationSec: Number(f.视频时长秒) || 0, width: size.width, height: size.height, orientation: assetOrientation(f.画面方向),
-    resolution: f.分辨率 || '', technicalCheckStatus: f.技术检查状态 || '待检查',
+    resolution: f.分辨率 || '', technicalCheckStatus: checkStatus,
     advisorConfirmationStatus: f.顾问确认状态 || '待确认', requiresReshoot: yes(f.是否需要重拍), invalidReason: f.不合格原因 || '',
-    status: attachment ? (f.技术检查状态 === '检查通过' ? 'available' : 'invalid') : 'waiting_upload', simulation: yes(f.模拟数据),
+    status: attachment
+      ? checkStatus === '检查通过' ? 'available' : ['待检查', '检查中'].includes(checkStatus) ? 'checking' : 'invalid'
+      : 'waiting_upload',
+    simulation: yes(f.模拟数据),
+  };
+}
+
+function mapEditingJob(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id,
+    editingJobId: f.剪辑任务ID,
+    contentId: f.内容ID,
+    contentVersion: Number(f.内容版本) || 1,
+    assetIds: split(f.使用素材ID),
+    editingPlan: parseJson(f.剪辑方案JSON, {}),
+    editor: f.剪辑模型或Skill || 'local-ffmpeg',
+    status: f.任务状态 || '待剪辑',
+    progress: Number(f.进度) || 0,
+    progressMessage: f.进度说明 || '',
+    failureReason: f.失败原因 || '',
+    retryCount: Number(f.重试次数) || 0,
+    previewFileToken: f.预览视频Token || null,
+    finalFileToken: f.最终视频Token || null,
+    advisorConfirmationStatus: f.顾问确认状态 || '待确认',
+    completedAt: f.完成时间 || null,
+    simulation: yes(f.模拟数据),
   };
 }
 
@@ -347,6 +390,13 @@ export class FeishuOneKosRepository {
   }
 
   uploadAdvisorAssetFile(file) { return this.client.uploadMedia(file); }
+  downloadAdvisorAssetFile(fileToken) { return this.client.downloadMedia(fileToken); }
+  uploadRenderedVideoFile(file) { return this.client.uploadMedia(file); }
+
+  async getEditingJob(editingJobId) {
+    const record = await this.find('editingJobs', '剪辑任务ID', editingJobId);
+    return record ? mapEditingJob(record) : null;
+  }
 
   async saveAdvisor(advisor) {
     const fields = {
@@ -490,9 +540,19 @@ export class FeishuOneKosRepository {
       顾问确认状态: job.advisorConfirmationStatus,
       模拟数据: job.simulation ? '是' : '否',
     };
-    if (job.previewFileToken) fields.预览视频Token = job.previewFileToken;
-    if (job.finalFileToken) fields.最终视频Token = job.finalFileToken;
-    if (job.completedAt) fields.完成时间 = job.completedAt;
+    if (job.previewFileToken) {
+      fields.预览视频Token = job.previewFileToken;
+      fields.预览视频 = [{ file_token: job.previewFileToken }];
+    }
+    if (job.finalFileToken) {
+      fields.最终视频Token = job.finalFileToken;
+      fields.最终视频 = [{ file_token: job.finalFileToken }];
+    }
+    if (job.completedAt) fields.完成时间 = Date.parse(job.completedAt) || job.completedAt;
+    if (job.recordId) {
+      const record = await this.client.updateRecord(this.tableIds.editingJobs, job.recordId, fields);
+      return { action: 'updated', recordId: record?.record_id || job.recordId, record };
+    }
     const result = await this.client.upsertByField(this.tableIds.editingJobs, '剪辑任务ID', job.editingJobId, fields);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }

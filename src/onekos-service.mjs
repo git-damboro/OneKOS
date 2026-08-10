@@ -38,6 +38,22 @@ function asList(value) {
   return value ? [String(value)] : [];
 }
 
+function editingContentFromRequirements(content, requirements) {
+  const required = requirements.filter((item) => item.required).sort((a, b) => a.shotOrder - b.shotOrder || a.slotId.localeCompare(b.slotId));
+  return {
+    ...content,
+    aspectRatio: '9:16',
+    estimatedDurationSec: required.reduce((sum, item) => sum + (Number(item.suggestedDurationSec) || Number(item.minDurationSec) || 5), 0),
+    shots: required.map((requirement) => ({
+      shotId: requirement.shotId || requirement.slotId,
+      durationSec: Number(requirement.suggestedDurationSec) || Number(requirement.minDurationSec) || 5,
+      scriptText: requirement.scriptText || '',
+      requiredAssets: [{ slotId: requirement.slotId }],
+    })),
+    editInstructions: content.editInstructions || [],
+  };
+}
+
 function localCandidate(context) {
   const { advisor, task } = context;
   return {
@@ -150,12 +166,14 @@ function onboardingModelPrompt(input) {
 }
 
 export class OneKosService {
-  constructor({ repository, llmClient = null, mode = 'simulation', clock = () => new Date(), idFactory = () => `ONB-${crypto.randomUUID()}` }) {
+  constructor({ repository, llmClient = null, videoEditor = null, mode = 'simulation', clock = () => new Date(), idFactory = () => `ONB-${crypto.randomUUID()}` }) {
     this.repository = repository;
     this.llmClient = llmClient;
+    this.videoEditor = videoEditor;
     this.mode = mode;
     this.clock = clock;
     this.idFactory = idFactory;
+    this.runningEditingJobs = new Set();
   }
 
   today() { return this.clock().toISOString().slice(0, 10); }
@@ -572,9 +590,10 @@ export class OneKosService {
   }
 
   async getContentMaterials(contentId) {
-    const [allShootingRequirements, allAdvisorAssets] = await Promise.all([
+    const [allShootingRequirements, allAdvisorAssets, editingJob] = await Promise.all([
       this.repository.listShootingRequirements(contentId),
       this.repository.listAdvisorAssets(contentId),
+      this.repository.getEditingJob ? this.repository.getEditingJob(`${contentId}-RENDER-001`) : null,
     ]);
     const shootingRequirements = allShootingRequirements.filter((item) => item.required);
     const activeSlots = new Set(shootingRequirements.map((item) => item.slotId));
@@ -587,6 +606,7 @@ export class OneKosService {
       json3: { contentId, uploadedAssets: advisorAssets, simulation: advisorAssets.some((asset) => asset.simulation) },
       comparison,
       status: comparison.complete ? 'ready_for_edit' : comparison.invalid.length ? 'waiting_reshoot' : 'waiting_upload',
+      editingJob,
     };
   }
 
@@ -605,11 +625,12 @@ export class OneKosService {
       advisorAssets: materials.json3.uploadedAssets,
       comparison: materials.comparison,
       status: materials.status,
+      editingJob: materials.editingJob,
       recovered: true,
     };
   }
 
-  async uploadAdvisorAsset({ contentId, slotId, advisorId, fileName, mimeType, bytes, durationSec = 0, width = 0, height = 0 }) {
+  async stageAdvisorAssetUpload({ contentId, slotId, advisorId, fileName, mimeType, bytes, durationSec = 0, width = 0, height = 0 }) {
     if (!contentId || !slotId || !advisorId || !fileName || !bytes?.byteLength) {
       const error = new Error('内容、素材槽位、顾问和文件均不能为空');
       error.statusCode = 400;
@@ -634,16 +655,69 @@ export class OneKosService {
     }
 
     const uploaded = await this.repository.uploadAdvisorAssetFile({ fileName, mimeType, bytes });
-    const rawAsset = {
+    const uploadedAsset = {
       ...(placeholder || {}),
       assetId: placeholder?.assetId || `${contentId}-ASSET-${slotId.split('-SLOT-').pop()}`,
       contentId, slotId, shotId: requirement.shotId, advisorId,
       fileToken: uploaded.fileToken, fileName, mimeType, fileSize: bytes.byteLength,
-      durationSec: Number(durationSec) || 0, width: Number(width) || 0, height: Number(height) || 0,
+      type: requirement.type,
+      durationSec: Number(durationSec) || 0,
+      width: Number(width) || 0,
+      height: Number(height) || 0,
+      orientation: requirement.orientation,
+      resolution: width && height ? `${width}x${height}` : '',
+      technicalCheckStatus: '检查中',
+      advisorConfirmationStatus: '待确认',
+      requiresReshoot: false,
+      invalidReason: '',
+      status: 'checking',
+      simulation: Boolean(uploaded.simulation),
     };
-    const checkedAsset = { ...inspectUploadedAsset(requirement, rawAsset), simulation: Boolean(uploaded.simulation) };
+    const assetWrite = await this.repository.saveAdvisorAssets([uploadedAsset]);
+    const assets = existingAssets.filter((item) => item.assetId !== uploadedAsset.assetId).concat(uploadedAsset);
+    const comparison = compareRequirementsAndAssets(requirements, assets);
+    return {
+      contentId,
+      uploadedAsset,
+      assetWrite,
+      shootingRequirements: requirements,
+      json3: { contentId, uploadedAssets: assets, simulation: assets.some((asset) => asset.simulation) },
+      comparison,
+      status: 'checking',
+      editingJob: null,
+    };
+  }
+
+  async checkAdvisorAsset({ contentId, slotId, advisorId, fileName, mimeType, bytes, durationSec = 0, width = 0, height = 0 }) {
+    const requirements = await this.repository.listShootingRequirements(contentId);
+    const requirement = requirements.find((item) => item.slotId === slotId);
+    if (!requirement) requireRecord(null, '素材槽位', slotId);
+    const task = requireRecord(await this.repository.getTask(requirement.taskId), '内容任务', requirement.taskId);
+    if (task.advisorId !== advisorId) {
+      const error = new Error(`素材槽位 ${slotId} 不属于顾问 ${advisorId}`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const existingAssets = await this.repository.listAdvisorAssets(contentId);
+    const uploadedAsset = requireRecord(existingAssets.find((item) => item.slotId === slotId), '已上传素材', slotId);
+    const serverMetadata = this.videoEditor?.inspectBytes
+      ? await this.videoEditor.inspectBytes({ bytes, fileName, mimeType, type: requirement.type })
+      : null;
+    const rawAsset = {
+      ...uploadedAsset,
+      fileName: fileName || uploadedAsset.fileName,
+      mimeType: mimeType || uploadedAsset.mimeType,
+      fileSize: bytes?.byteLength || uploadedAsset.fileSize,
+      durationSec: Number(serverMetadata?.durationSec) || Number(durationSec) || uploadedAsset.durationSec || 0,
+      width: Number(serverMetadata?.width) || Number(width) || uploadedAsset.width || 0,
+      height: Number(serverMetadata?.height) || Number(height) || uploadedAsset.height || 0,
+    };
+    const checkedAsset = { ...inspectUploadedAsset(requirement, rawAsset), simulation: Boolean(uploadedAsset.simulation) };
     const assetWrite = await this.repository.saveAdvisorAssets([checkedAsset]);
-    const assets = existingAssets.filter((item) => item.assetId !== checkedAsset.assetId).concat(checkedAsset);
+    const persistedAssets = await this.repository.listAdvisorAssets(contentId);
+    const assets = (persistedAssets.length ? persistedAssets : existingAssets)
+      .filter((item) => item.assetId !== checkedAsset.assetId)
+      .concat(checkedAsset);
     const comparison = compareRequirementsAndAssets(requirements, assets);
     const resolvedRequirements = requirements.map((item) => ({
       ...item,
@@ -652,13 +726,135 @@ export class OneKosService {
         : comparison.invalid.some((invalid) => invalid.slotId === item.slotId) ? '需要重拍' : '待上传',
     }));
     const requirementWrites = await this.repository.saveShootingRequirements(resolvedRequirements);
+    let editingJob = null;
+    let editingJobWrite = null;
+    if (comparison.complete) {
+      const content = requireRecord(await this.repository.getContentResult(contentId), '内容成果', contentId);
+      editingJob = buildEditingJob({
+        content: editingContentFromRequirements(content, resolvedRequirements),
+        assets,
+        comparison,
+        timestamp: this.timestamp(),
+      });
+      editingJob.editor = '本地 FFmpeg';
+      editingJob.simulation = assets.some((asset) => asset.simulation);
+      editingJobWrite = await this.repository.saveEditingJob(editingJob);
+    }
     return {
       contentId, checkedAsset, assetWrite, shootingRequirements: resolvedRequirements,
       json3: { contentId, uploadedAssets: assets, simulation: assets.some((asset) => asset.simulation) },
       comparison,
       status: comparison.complete ? 'ready_for_edit' : comparison.invalid.length ? 'waiting_reshoot' : 'waiting_upload',
-      requirementWrites,
+      requirementWrites, editingJob, editingJobWrite,
     };
+  }
+
+  async failAdvisorAssetCheck({ contentId, slotId, message }) {
+    const assets = await this.repository.listAdvisorAssets(contentId);
+    const uploadedAsset = assets.find((item) => item.slotId === slotId);
+    if (!uploadedAsset) return null;
+    const failedAsset = {
+      ...uploadedAsset,
+      technicalCheckStatus: '检查失败',
+      requiresReshoot: true,
+      invalidReason: `自动检查失败：${message}`,
+      status: 'invalid',
+    };
+    await this.repository.saveAdvisorAssets([failedAsset]);
+    return failedAsset;
+  }
+
+  async uploadAdvisorAsset(input) {
+    await this.stageAdvisorAssetUpload(input);
+    return this.checkAdvisorAsset(input);
+  }
+
+  async getEditingJob(editingJobId) {
+    return requireRecord(await this.repository.getEditingJob(editingJobId), '剪辑任务', editingJobId);
+  }
+
+  async getEditingPreview(editingJobId) {
+    if (!this.videoEditor) requireRecord(null, '视频剪辑器', 'local-ffmpeg');
+    const job = await this.getEditingJob(editingJobId);
+    if (!['待顾问预览', '已完成'].includes(job.status)) {
+      const error = new Error(`剪辑任务尚未完成：${job.status}`);
+      error.statusCode = 409;
+      throw error;
+    }
+    return this.videoEditor.readOutput(job);
+  }
+
+  async startEditingJob(editingJobId) {
+    if (!this.videoEditor) {
+      const error = new Error('本地视频剪辑器未配置');
+      error.statusCode = 503;
+      throw error;
+    }
+    const job = await this.getEditingJob(editingJobId);
+    if (job.status === '已完成') return job;
+    if (this.runningEditingJobs.has(editingJobId)) {
+      return { ...job, status: '待剪辑', progress: Math.max(5, Number(job.progress) || 0) };
+    }
+    this.runningEditingJobs.add(editingJobId);
+    try {
+      await this.videoEditor.checkAvailability();
+      const queued = {
+        ...job,
+        editor: '本地 FFmpeg',
+        status: '待剪辑',
+        progress: 5,
+        failureReason: '',
+        retryCount: job.status === '失败' ? Number(job.retryCount || 0) + 1 : Number(job.retryCount || 0),
+      };
+      await this.repository.saveEditingJob(queued);
+      setTimeout(() => {
+        this.executeEditingJob(editingJobId).catch(() => {}).finally(() => this.runningEditingJobs.delete(editingJobId));
+      }, 0);
+      return queued;
+    } catch (error) {
+      this.runningEditingJobs.delete(editingJobId);
+      throw error;
+    }
+  }
+
+  async executeEditingJob(editingJobId) {
+    let job = await this.getEditingJob(editingJobId);
+    const saveProgress = async (status, progress, failureReason = '') => {
+      job = { ...job, status, progress, failureReason };
+      await this.repository.saveEditingJob(job);
+    };
+    try {
+      await saveProgress('剪辑中', 10);
+      const assets = (await this.repository.listAdvisorAssets(job.contentId))
+        .filter((asset) => job.assetIds.includes(asset.assetId) && asset.status === 'available' && asset.fileToken);
+      if (assets.length !== job.assetIds.length) throw new Error(`剪辑任务需要 ${job.assetIds.length} 个素材，当前只有 ${assets.length} 个可用素材`);
+      await saveProgress('剪辑中', 20);
+      const result = await this.videoEditor.render({
+        job,
+        assets,
+        getAssetBytes: async (asset) => (await this.repository.downloadAdvisorAssetFile(asset.fileToken)).bytes,
+        onProgress: async (progress) => saveProgress('剪辑中', progress),
+      });
+      await saveProgress('剪辑中', 90);
+      const uploaded = await this.repository.uploadRenderedVideoFile(result);
+      job = {
+        ...job,
+        status: '待顾问预览',
+        progress: 100,
+        failureReason: '',
+        previewFileToken: uploaded.fileToken,
+        finalFileToken: null,
+        completedAt: this.timestamp(),
+        simulation: Boolean(uploaded.simulation),
+        output: { fileName: result.fileName, size: result.size, durationSec: result.durationSec, localPath: result.outputPath },
+      };
+      await this.repository.saveEditingJob(job);
+      return job;
+    } catch (error) {
+      job = { ...job, status: '失败', progress: 0, failureReason: error.message || '未知剪辑错误' };
+      await this.repository.saveEditingJob(job).catch(() => {});
+      throw error;
+    }
   }
 
   async runProductionDemo(options = {}) {
