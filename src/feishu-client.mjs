@@ -41,13 +41,20 @@ export class FeishuBitableClient {
   async requestJson(url, options = {}, authenticated = true) {
     const headers = { ...(options.headers || {}) };
     if (authenticated) headers.Authorization = `Bearer ${await this.getTenantAccessToken()}`;
-    const signal = options.signal || AbortSignal.timeout(this.timeoutMs);
     let response;
-    try {
-      response = await this.fetchImpl(url, { ...options, headers, signal });
-    } catch (error) {
-      throw new FeishuOpenApiError(`飞书请求失败：${error.message}`, { details: error });
+    const retryable = authenticated === false || (options.method || 'GET').toUpperCase() === 'GET';
+    const attempts = retryable ? 3 : 1;
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        response = await this.fetchImpl(url, { ...options, headers, signal: options.signal || AbortSignal.timeout(this.timeoutMs) });
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * 400));
+      }
     }
+    if (!response) throw new FeishuOpenApiError(`飞书请求失败：${lastError?.message || 'unknown error'}`, { details: lastError });
 
     let body;
     try {
@@ -115,5 +122,56 @@ export class FeishuBitableClient {
     }
     const record = await this.createRecord(tableId, { ...fields, [keyField]: keyValue });
     return { action: 'created', record };
+  }
+
+  async uploadMedia({ fileName, mimeType, bytes }) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (!data.byteLength) throw new FeishuOpenApiError('不能上传空文件');
+    if (data.byteLength > 20 * 1024 * 1024) throw new FeishuOpenApiError('单个素材不能超过 20MB');
+
+    const form = new FormData();
+    form.set('file_name', fileName);
+    form.set('parent_type', 'bitable_file');
+    form.set('parent_node', this.appToken);
+    form.set('size', String(data.byteLength));
+    form.set('file', new Blob([data], { type: mimeType || 'application/octet-stream' }), fileName);
+    const body = await this.requestJson(`${this.apiBaseUrl}/drive/v1/medias/upload_all`, { method: 'POST', body: form });
+    const fileToken = body.data?.file_token;
+    if (!fileToken) throw new FeishuOpenApiError('飞书未返回文件 Token', { details: body });
+    return { fileToken };
+  }
+
+  async downloadMedia(fileToken) {
+    if (!fileToken) throw new FeishuOpenApiError('下载素材必须提供文件 Token');
+    const url = `${this.apiBaseUrl}/drive/v1/medias/${encodeURIComponent(fileToken)}/download`;
+    let response;
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        response = await this.fetchImpl(url, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${await this.getTenantAccessToken()}` },
+          signal: AbortSignal.timeout(Math.max(this.timeoutMs, 60_000)),
+        });
+        if (response.ok) break;
+        const details = await response.text().catch(() => '');
+        throw new FeishuOpenApiError(`飞书素材下载失败（HTTP ${response.status}）`, { status: response.status, details });
+      } catch (error) {
+        lastError = error;
+        response = null;
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      }
+    }
+    if (!response) {
+      if (lastError instanceof FeishuOpenApiError) throw lastError;
+      throw new FeishuOpenApiError(`飞书素材下载失败：${lastError?.message || 'unknown error'}`, { details: lastError });
+    }
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.byteLength) throw new FeishuOpenApiError('飞书返回了空素材');
+    return {
+      bytes,
+      mimeType: response.headers.get('content-type') || 'application/octet-stream',
+      contentDisposition: response.headers.get('content-disposition') || '',
+    };
   }
 }

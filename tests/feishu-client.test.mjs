@@ -93,3 +93,32 @@ test('OpenAPI 非零 code 转换为可诊断错误', async () => {
     (error) => error instanceof FeishuOpenApiError && error.code === 1254302 && error.message.includes('permission denied'),
   );
 });
+
+test('素材上传使用 bitable_file 上传点并返回飞书文件 Token', async () => {
+  const queue = createQueuedFetch([
+    jsonResponse({ code: 0, tenant_access_token: 'token-1', expire: 7200 }),
+    jsonResponse({ code: 0, data: { file_token: 'box-file-001' } }),
+  ]);
+  const client = new FeishuBitableClient({ ...config, fetchImpl: queue.fetchImpl });
+  const result = await client.uploadMedia({ fileName: 'opening.mp4', mimeType: 'video/mp4', bytes: new Uint8Array([1, 2, 3]) });
+
+  assert.equal(result.fileToken, 'box-file-001');
+  assert.match(queue.calls[1].url, /drive\/v1\/medias\/upload_all$/);
+  assert.equal(queue.calls[1].options.body.get('parent_type'), 'bitable_file');
+  assert.equal(queue.calls[1].options.body.get('parent_node'), 'base-token');
+  assert.equal(queue.calls[1].options.body.get('size'), '3');
+});
+
+test('素材下载使用 file_token 获取二进制内容', async () => {
+  const queue = createQueuedFetch([
+    jsonResponse({ code: 0, tenant_access_token: 'token-1', expire: 7200 }),
+    new Response(new Uint8Array([4, 5, 6]), { status: 200, headers: { 'content-type': 'video/mp4' } }),
+  ]);
+  const client = new FeishuBitableClient({ ...config, fetchImpl: queue.fetchImpl });
+  const result = await client.downloadMedia('box-file-001');
+
+  assert.deepEqual([...result.bytes], [4, 5, 6]);
+  assert.equal(result.mimeType, 'video/mp4');
+  assert.match(queue.calls[1].url, /drive\/v1\/medias\/box-file-001\/download$/);
+  assert.equal(queue.calls[1].options.headers.Authorization, 'Bearer token-1');
+});

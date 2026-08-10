@@ -33,12 +33,16 @@ const SIMULATION_DATA = {
   commentLeads: [],
   feedbackEvents: [],
   onboardingSessions: [],
+  shootingRequirements: [],
+  advisorAssets: [],
+  editingJobs: [],
 };
 
 export class SimulationOneKosRepository {
   constructor(seed = SIMULATION_DATA) {
-    this.data = clone(seed);
+    this.data = { ...clone(SIMULATION_DATA), ...clone(seed) };
     this.sequence = 1;
+    this.files = new Map();
   }
 
   snapshot() { return clone(this.data); }
@@ -46,12 +50,31 @@ export class SimulationOneKosRepository {
   async getAdvisor(advisorId) { return clone(this.data.advisors.find((item) => item.advisorId === advisorId) || null); }
   async getProfileTags(advisorId) { return clone(this.data.profileTags.filter((item) => item.advisorId === advisorId)); }
   async getTask(taskId) { return clone(this.data.contentTasks.find((item) => item.taskId === taskId) || null); }
+  async getContentResult(contentId) { return clone(this.data.contentResults.find((item) => item.contentId === contentId) || null); }
   async listContentTasks(advisorId) { return clone(this.data.contentTasks.filter((item) => !advisorId || item.advisorId === advisorId)); }
   async listCommentLeads(advisorId) { return clone(this.data.commentLeads.filter((item) => !advisorId || item.advisorId === advisorId)); }
   async getValidKnowledge(model, today) { return clone(this.data.brandKnowledge.filter((item) => item.model === model && item.status === '有效' && (!item.validUntil || item.validUntil >= today))); }
   async listContentResults() { return clone(this.data.contentResults); }
   async getFeedbackEvent(eventId) { return clone(this.data.feedbackEvents.find((item) => item.eventId === eventId) || null); }
   async getOnboardingSession(sessionId) { return clone(this.data.onboardingSessions.find((item) => item.sessionId === sessionId) || null); }
+  async listShootingRequirements(contentId) { return clone(this.data.shootingRequirements.filter((item) => item.contentId === contentId)); }
+  async listAdvisorAssets(contentId) { return clone(this.data.advisorAssets.filter((item) => item.contentId === contentId)); }
+  async getEditingJob(editingJobId) { return clone(this.data.editingJobs.find((item) => item.editingJobId === editingJobId) || null); }
+  async uploadAdvisorAssetFile({ fileName, mimeType, bytes }) {
+    const fileToken = `sim-${Date.now()}-${fileName}`;
+    this.files.set(fileToken, { bytes: new Uint8Array(bytes), mimeType });
+    return { fileToken, simulation: true };
+  }
+  async downloadAdvisorAssetFile(fileToken) {
+    const file = this.files.get(fileToken);
+    if (!file) throw new Error(`模拟素材不存在：${fileToken}`);
+    return { ...file, bytes: new Uint8Array(file.bytes) };
+  }
+  async uploadRenderedVideoFile({ fileName, mimeType, bytes }) {
+    const fileToken = `sim-render-${Date.now()}-${fileName}`;
+    this.files.set(fileToken, { bytes: new Uint8Array(bytes), mimeType });
+    return { fileToken, simulation: true };
+  }
 
   async upsert(collection, key, value, record) {
     const index = this.data[collection].findIndex((item) => item[key] === value);
@@ -65,6 +88,29 @@ export class SimulationOneKosRepository {
   }
 
   saveContentPackage(content) { return this.upsert('contentResults', 'contentId', content.contentId, content); }
+  async saveShootingRequirements(requirements) {
+    const writes = [];
+    for (const requirement of requirements) writes.push(await this.upsert('shootingRequirements', 'slotId', requirement.slotId, requirement));
+    return writes;
+  }
+  async retireShootingRequirements(contentId, activeSlotIds) {
+    const active = new Set(activeSlotIds);
+    const retired = [];
+    for (const requirement of this.data.shootingRequirements) {
+      if (requirement.contentId === contentId && !active.has(requirement.slotId)) {
+        requirement.required = false;
+        requirement.status = '可选未上传';
+        retired.push(clone(requirement));
+      }
+    }
+    return retired;
+  }
+  async saveAdvisorAssets(assets) {
+    const writes = [];
+    for (const asset of assets) writes.push(await this.upsert('advisorAssets', 'assetId', asset.assetId, asset));
+    return writes;
+  }
+  saveEditingJob(job) { return this.upsert('editingJobs', 'editingJobId', job.editingJobId, job); }
   saveCommentLead(lead) { return this.upsert('commentLeads', 'leadId', lead.leadId, lead); }
   saveFeedbackEvent(event) { return this.upsert('feedbackEvents', 'eventId', event.eventId, event); }
   saveProfileTag(tag) { return this.upsert('profileTags', 'tagId', tag.tagId, tag); }
@@ -74,6 +120,10 @@ export class SimulationOneKosRepository {
 }
 
 function yes(value) { return value === true || value === '是'; }
+function number(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 function split(value) {
   if (Array.isArray(value)) return value;
   return value ? String(value).split(/[｜|\n]/).map((item) => item.trim()).filter(Boolean) : [];
@@ -93,9 +143,9 @@ function mapAdvisor(record) {
     displayName: f.展示名称,
     city: f.城市,
     store: f.门店,
-    experienceYears: f.从业年限,
+    experienceYears: number(f.从业年限),
     targetAudience: f.目标用户,
-    profileMaturity: f.画像成熟度,
+    profileMaturity: number(f.画像成熟度),
     workflowStatus: f.流程状态,
     initializationStatus: f.初始化状态,
     profileVersion: f.当前画像版本,
@@ -111,9 +161,40 @@ function mapContentTask(record) {
   const f = record.fields;
   return {
     recordId: record.record_id, taskId: f.任务ID, advisorId: f.顾问ID, targetModel: f.目标车型,
-    userQuestion: f.用户问题, topic: f.内容角度, routeScore: f.路由匹配分, matrixGap: f.矩阵空白,
+    userQuestion: f.用户问题, topic: f.内容角度, routeScore: number(f.路由匹配分), matrixGap: f.矩阵空白,
     profileEvidence: split(f.画像证据ID), taskDate: f.任务日期, status: f.状态,
     routedAt: f.路由时间 || '', decision: f.顾问决策 || '', rejectionReason: f.拒绝原因 || '', decidedAt: f.决策时间 || '', simulation: yes(f.模拟数据),
+  };
+}
+
+function mapContentResult(record) {
+  const f = record.fields;
+  const factScore = number(f.事实质检分);
+  const complianceScore = number(f.合规质检分);
+  const personaScore = number(f.人设质检分);
+  const matrixScore = number(f.矩阵质检分);
+  return {
+    recordId: record.record_id,
+    contentId: f.内容ID,
+    taskId: f.任务ID,
+    title: f.标题,
+    hook: f.开场,
+    script: f.口播脚本,
+    storyboard: split(f.分镜),
+    materials: split(f.素材清单),
+    factRefs: split(f.事实引用ID),
+    profileRefs: split(f.画像引用ID),
+    status: f.状态,
+    quality: {
+      fact: { score: factScore },
+      compliance: { score: complianceScore },
+      persona: { score: personaScore },
+      matrix: { score: matrixScore, similarity: 0, risk: matrixScore >= 70 ? '低' : '高' },
+      passed: [factScore, complianceScore, personaScore, matrixScore].every((score) => score >= 70),
+      issues: [],
+    },
+    simulation: yes(f.模拟数据),
+    generator: 'persisted-content',
   };
 }
 
@@ -125,6 +206,77 @@ function mapCommentLead(record) {
     familyStructure: f.家庭结构, model: f.车型, purchaseWindow: f.购车时间,
     testDriveIntent: f.试驾意愿, score: f.线索分, grade: f.线索等级, status: f.状态,
     nextAction: f.下一步建议, fieldEvidence: parseJson(f.字段证据, {}), updatedAt: f.最后同步时间,
+    simulation: yes(f.模拟数据),
+  };
+}
+function feishuAssetType(value) { return ({ video: '视频', image: '图片', audio: '音频', text: '文本' })[value] || value; }
+function feishuOrientation(value) { return ({ portrait: '竖屏9:16', landscape: '横屏16:9', any: '不限' })[value] || value; }
+function assetType(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === '图片' || normalized.startsWith('image/')) return 'image';
+  if (normalized === '音频' || normalized.startsWith('audio/')) return 'audio';
+  if (normalized === '文本' || normalized.startsWith('text/')) return 'text';
+  return 'video';
+}
+function assetOrientation(value) {
+  if (value === '横屏16:9') return 'landscape';
+  if (value === '不限') return 'any';
+  return 'portrait';
+}
+function dimensions(value) {
+  const match = String(value || '').match(/(\d+)x(\d+)/i);
+  return match ? { width: Number(match[1]), height: Number(match[2]) } : { width: 0, height: 0 };
+}
+
+function mapShootingRequirement(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id, slotId: f.素材槽位ID, contentId: f.内容ID, taskId: f.任务ID, shotId: f.镜头ID,
+    shotOrder: Number(f.镜头顺序) || 0, scriptText: f.对应台词 || '', visualDescription: f.画面描述 || '',
+    type: assetType(f.素材类型), required: yes(f.是否必填), suggestedDurationSec: Number(f.建议时长秒) || 0,
+    minDurationSec: Number(f.最低时长秒) || 0, orientation: assetOrientation(f.画面方向), shootingGuide: f.拍摄步骤 || '',
+    notes: f.注意事项 || '', status: f.状态 || '待上传', simulation: yes(f.模拟数据),
+  };
+}
+
+function mapAdvisorAsset(record) {
+  const f = record.fields;
+  const attachment = Array.isArray(f.素材文件) ? f.素材文件[0] : null;
+  const size = dimensions(f.分辨率);
+  const checkStatus = f.技术检查状态 || '待检查';
+  return {
+    recordId: record.record_id, assetId: f.素材ID, contentId: f.内容ID, slotId: f.素材槽位ID, shotId: f.镜头ID,
+    advisorId: f.顾问ID, fileToken: attachment?.file_token || f.飞书文件Token || null, fileName: attachment?.name || '',
+    mimeType: attachment?.type || '', fileSize: Number(attachment?.size) || 0, type: assetType(f.文件类型 || attachment?.type),
+    durationSec: Number(f.视频时长秒) || 0, width: size.width, height: size.height, orientation: assetOrientation(f.画面方向),
+    resolution: f.分辨率 || '', technicalCheckStatus: checkStatus,
+    advisorConfirmationStatus: f.顾问确认状态 || '待确认', requiresReshoot: yes(f.是否需要重拍), invalidReason: f.不合格原因 || '',
+    status: attachment
+      ? checkStatus === '检查通过' ? 'available' : ['待检查', '检查中'].includes(checkStatus) ? 'checking' : 'invalid'
+      : 'waiting_upload',
+    simulation: yes(f.模拟数据),
+  };
+}
+
+function mapEditingJob(record) {
+  const f = record.fields;
+  return {
+    recordId: record.record_id,
+    editingJobId: f.剪辑任务ID,
+    contentId: f.内容ID,
+    contentVersion: Number(f.内容版本) || 1,
+    assetIds: split(f.使用素材ID),
+    editingPlan: parseJson(f.剪辑方案JSON, {}),
+    editor: f.剪辑模型或Skill || 'local-ffmpeg',
+    status: f.任务状态 || '待剪辑',
+    progress: Number(f.进度) || 0,
+    progressMessage: f.进度说明 || '',
+    failureReason: f.失败原因 || '',
+    retryCount: Number(f.重试次数) || 0,
+    previewFileToken: f.预览视频Token || null,
+    finalFileToken: f.最终视频Token || null,
+    advisorConfirmationStatus: f.顾问确认状态 || '待确认',
+    completedAt: f.完成时间 || null,
     simulation: yes(f.模拟数据),
   };
 }
@@ -164,6 +316,11 @@ export class FeishuOneKosRepository {
     return mapContentTask(record);
   }
 
+  async getContentResult(contentId) {
+    const record = await this.find('contentResults', '内容ID', contentId);
+    return record ? mapContentResult(record) : null;
+  }
+
   async listContentTasks(advisorId) {
     const records = await this.client.listRecords(this.tableIds.contentTasks);
     return records.filter((record) => record.fields.任务ID && (!advisorId || record.fields.顾问ID === advisorId)).map(mapContentTask);
@@ -187,10 +344,7 @@ export class FeishuOneKosRepository {
 
   async listContentResults() {
     const records = await this.client.listRecords(this.tableIds.contentResults);
-    return records.filter((record) => record.fields.内容ID).map((record) => {
-      const f = record.fields;
-      return { recordId: record.record_id, contentId: f.内容ID, taskId: f.任务ID, title: f.标题, hook: f.开场, script: f.口播脚本, storyboard: split(f.分镜), materials: split(f.素材清单), factRefs: split(f.事实引用ID), profileRefs: split(f.画像引用ID), status: f.状态, simulation: yes(f.模拟数据) };
-    });
+    return records.filter((record) => record.fields.内容ID).map(mapContentResult);
   }
 
   async getFeedbackEvent(eventId) {
@@ -225,15 +379,37 @@ export class FeishuOneKosRepository {
     };
   }
 
+  async listShootingRequirements(contentId) {
+    const records = await this.client.listRecords(this.tableIds.shootingRequirements);
+    return records.filter((record) => record.fields.素材槽位ID && record.fields.内容ID === contentId).map(mapShootingRequirement);
+  }
+
+  async listAdvisorAssets(contentId) {
+    const records = await this.client.listRecords(this.tableIds.advisorAssets);
+    return records.filter((record) => record.fields.素材ID && record.fields.内容ID === contentId).map(mapAdvisorAsset);
+  }
+
+  uploadAdvisorAssetFile(file) { return this.client.uploadMedia(file); }
+  downloadAdvisorAssetFile(fileToken) { return this.client.downloadMedia(fileToken); }
+  uploadRenderedVideoFile(file) { return this.client.uploadMedia(file); }
+
+  async getEditingJob(editingJobId) {
+    const record = await this.find('editingJobs', '剪辑任务ID', editingJobId);
+    return record ? mapEditingJob(record) : null;
+  }
+
   async saveAdvisor(advisor) {
     const fields = {
       顾问ID: advisor.advisorId, 展示名称: advisor.displayName, 城市: advisor.city, 门店: advisor.store,
       从业年限: advisor.experienceYears, 目标用户: advisor.targetAudience, 画像成熟度: advisor.profileMaturity,
-      流程状态: advisor.workflowStatus, 初始化状态: advisor.initializationStatus,
-      当前画像版本: advisor.profileVersion, 身份来源: advisor.identitySource,
-      外部用户标识: advisor.externalUserId || '', 授权状态: advisor.authorizationStatus,
-      首次初始化时间: advisor.initializedAt || '', 模拟数据: advisor.simulation ? '是' : '否',
+      流程状态: advisor.workflowStatus, 授权状态: advisor.authorizationStatus,
+      模拟数据: advisor.simulation ? '是' : '否',
     };
+    if (advisor.initializationStatus !== undefined) fields.初始化状态 = advisor.initializationStatus;
+    if (advisor.profileVersion !== undefined) fields.当前画像版本 = advisor.profileVersion;
+    if (advisor.identitySource !== undefined) fields.身份来源 = advisor.identitySource;
+    if (advisor.externalUserId !== undefined) fields.外部用户标识 = advisor.externalUserId || '';
+    if (advisor.initializedAt !== undefined) fields.首次初始化时间 = advisor.initializedAt || '';
     const result = await this.client.upsertByField(this.tableIds.advisors, '顾问ID', advisor.advisorId, fields);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
@@ -272,6 +448,112 @@ export class FeishuOneKosRepository {
       人设质检分: content.quality?.persona?.score, 矩阵质检分: content.quality?.matrix?.score,
     };
     const result = await this.client.upsertByField(this.tableIds.contentResults, '内容ID', content.contentId, fields);
+    return { action: result.action, recordId: result.record?.record_id, record: result.record };
+  }
+
+  async saveShootingRequirements(requirements) {
+    const writes = [];
+    for (const requirement of requirements) {
+      const fields = {
+        素材槽位ID: requirement.slotId,
+        内容ID: requirement.contentId,
+        任务ID: requirement.taskId,
+        镜头ID: requirement.shotId,
+        镜头顺序: requirement.shotOrder,
+        对应台词: requirement.scriptText,
+        画面描述: requirement.visualDescription,
+        素材类型: feishuAssetType(requirement.type),
+        是否必填: requirement.required ? '是' : '否',
+        建议时长秒: requirement.suggestedDurationSec,
+        最低时长秒: requirement.minDurationSec,
+        画面方向: feishuOrientation(requirement.orientation),
+        拍摄步骤: requirement.shootingGuide,
+        注意事项: requirement.notes,
+        状态: requirement.status,
+        模拟数据: requirement.simulation ? '是' : '否',
+      };
+      const result = await this.client.upsertByField(this.tableIds.shootingRequirements, '素材槽位ID', requirement.slotId, fields);
+      writes.push({ action: result.action, recordId: result.record?.record_id, record: result.record });
+    }
+    return writes;
+  }
+
+  async retireShootingRequirements(contentId, activeSlotIds) {
+    const active = new Set(activeSlotIds);
+    const records = await this.client.listRecords(this.tableIds.shootingRequirements);
+    const stale = records.filter((record) => record.fields.内容ID === contentId
+      && record.fields.素材槽位ID
+      && !active.has(record.fields.素材槽位ID)
+      && yes(record.fields.是否必填));
+    const writes = [];
+    for (const record of stale) {
+      const updated = await this.client.updateRecord(this.tableIds.shootingRequirements, record.record_id, {
+        是否必填: '否',
+        状态: '可选未上传',
+      });
+      writes.push({ action: 'updated', recordId: updated.record_id, record: updated });
+    }
+    return writes;
+  }
+
+  async saveAdvisorAssets(assets) {
+    const writes = [];
+    for (const asset of assets) {
+      const fields = {
+        素材ID: asset.assetId,
+        内容ID: asset.contentId,
+        素材槽位ID: asset.slotId,
+        镜头ID: asset.shotId,
+        顾问ID: asset.advisorId,
+        文件类型: feishuAssetType(asset.type),
+        视频时长秒: asset.durationSec,
+        画面方向: feishuOrientation(asset.orientation),
+        分辨率: asset.resolution,
+        技术检查状态: asset.technicalCheckStatus,
+        顾问确认状态: asset.advisorConfirmationStatus,
+        是否需要重拍: asset.requiresReshoot ? '是' : '否',
+        不合格原因: asset.invalidReason,
+        模拟数据: asset.simulation ? '是' : '否',
+      };
+      if (asset.fileToken) {
+        fields.飞书文件Token = asset.fileToken;
+        fields.素材文件 = [{ file_token: asset.fileToken }];
+      }
+      const result = await this.client.upsertByField(this.tableIds.advisorAssets, '素材ID', asset.assetId, fields);
+      writes.push({ action: result.action, recordId: result.record?.record_id, record: result.record });
+    }
+    return writes;
+  }
+
+  async saveEditingJob(job) {
+    const fields = {
+      剪辑任务ID: job.editingJobId,
+      内容ID: job.contentId,
+      内容版本: job.contentVersion,
+      使用素材ID: (job.assetIds || []).join('｜'),
+      剪辑方案JSON: JSON.stringify(job.editingPlan),
+      剪辑模型或Skill: job.editor,
+      任务状态: job.status,
+      进度: job.progress,
+      失败原因: job.failureReason,
+      重试次数: job.retryCount,
+      顾问确认状态: job.advisorConfirmationStatus,
+      模拟数据: job.simulation ? '是' : '否',
+    };
+    if (job.previewFileToken) {
+      fields.预览视频Token = job.previewFileToken;
+      fields.预览视频 = [{ file_token: job.previewFileToken }];
+    }
+    if (job.finalFileToken) {
+      fields.最终视频Token = job.finalFileToken;
+      fields.最终视频 = [{ file_token: job.finalFileToken }];
+    }
+    if (job.completedAt) fields.完成时间 = Date.parse(job.completedAt) || job.completedAt;
+    if (job.recordId) {
+      const record = await this.client.updateRecord(this.tableIds.editingJobs, job.recordId, fields);
+      return { action: 'updated', recordId: record?.record_id || job.recordId, record };
+    }
+    const result = await this.client.upsertByField(this.tableIds.editingJobs, '剪辑任务ID', job.editingJobId, fields);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
 

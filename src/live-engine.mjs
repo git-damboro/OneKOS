@@ -30,19 +30,52 @@ function combinedContent(content) {
   return [content.title, content.hook, content.script].filter(Boolean).join('\n');
 }
 
+function numericTokens(value) {
+  return new Set(String(value || '').match(/\d+(?:\.\d+)?/g) || []);
+}
+
+function unsupportedNumericClaims(content, knowledge, task) {
+  let fullText = combinedContent(content);
+  if (task?.targetModel) fullText = fullText.replaceAll(String(task.targetModel), '');
+  const used = numericTokens(fullText);
+  const allowed = numericTokens([
+    task?.userQuestion,
+    task?.topic,
+    ...knowledge.map((item) => item.value),
+  ].filter(Boolean).join('\n'));
+  return [...used].filter((token) => !allowed.has(token));
+}
+
+const PRETEND_COMPLETED_PATTERNS = [
+  /我(?:今天|刚刚|已经|特意).{0,20}(?:实测|跑了|记录)/,
+  /实测给你看|实测结果(?:是|显示)/,
+  /出发时(?:的)?(?:电量|里程)(?:为|是|还有|剩余)/,
+  /导航显示.{0,20}(?:排队|等待)/,
+  /到了之后.{0,30}(?:分钟|用时|耗时)/,
+  /全程(?:计时|用时).{0,12}\d/,
+  /(?:换电站|补能站).{0,12}(?:就在|覆盖很密|下班顺路)/,
+  /一周补能.{0,8}(?:完全够|就够|足够)/,
+];
+
 function isKnowledgeValid(item, today) {
   if (!item || item.status !== '有效') return false;
   return !item.validUntil || item.validUntil >= today;
 }
 
-export function inspectContentPackage({ content, knowledge = [], profileTags = [], matrixContents = [], today = new Date().toISOString().slice(0, 10) }) {
+export function inspectContentPackage({ content, knowledge = [], profileTags = [], matrixContents = [], task = null, today = new Date().toISOString().slice(0, 10) }) {
   const issues = [];
   const validKnowledgeIds = new Set(knowledge.filter((item) => isKnowledgeValid(item, today)).map((item) => item.knowledgeId));
   const missingFacts = (content.factRefs || []).filter((id) => !validKnowledgeIds.has(id));
-  const factScore = missingFacts.length ? Math.max(40, 78 - missingFacts.length * 12) : 95;
-  if (missingFacts.length) issues.push(`事实引用不存在或已失效：${missingFacts.join('、')}`);
-
+  const unsupportedNumbers = unsupportedNumericClaims(content, knowledge, task);
   const fullText = combinedContent(content);
+  const pretendCompletedHits = PRETEND_COMPLETED_PATTERNS.filter((pattern) => pattern.test(fullText));
+  const factScore = missingFacts.length || unsupportedNumbers.length || pretendCompletedHits.length
+    ? Math.max(40, 78 - missingFacts.length * 12 - unsupportedNumbers.length * 5 - pretendCompletedHits.length * 8)
+    : 95;
+  if (missingFacts.length) issues.push(`事实引用不存在或已失效：${missingFacts.join('、')}`);
+  if (unsupportedNumbers.length) issues.push(`正文包含无输入来源数字：${unsupportedNumbers.join('、')}`);
+  if (pretendCompletedHits.length) issues.push('拍摄前脚本将待实拍数据描述成了已经发生的实测结果');
+
   const complianceHits = ABSOLUTE_OR_PROMISE_PATTERNS.filter((pattern) => pattern.test(fullText));
   const complianceScore = complianceHits.length ? Math.max(45, 76 - complianceHits.length * 8) : 95;
   if (complianceHits.length) issues.push('存在绝对化、保证性或价格承诺表达');
@@ -63,7 +96,7 @@ export function inspectContentPackage({ content, knowledge = [], profileTags = [
   if (matrixRisk === '高') issues.push('与矩阵既有内容近重复，需要重新路由内容角度');
 
   return {
-    fact: { score: factScore, missingRefs: missingFacts },
+    fact: { score: factScore, missingRefs: missingFacts, unsupportedNumbers, pretendCompletedHits: pretendCompletedHits.length },
     compliance: { score: complianceScore, hits: complianceHits.length },
     persona: { score: personaScore, invalidRefs: invalidProfileRefs },
     matrix: { score: matrixScore, risk: matrixRisk, similarity: Number(closest.similarity.toFixed(3)), closestContentId: closest.contentId },

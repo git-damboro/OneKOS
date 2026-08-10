@@ -13,7 +13,6 @@ import {
   adjustProfileTag,
   learnFromOutcome,
   analyzeSignals,
-  createContentPackage,
   inspectMatrix,
   runFourChecks,
   simulatePublication,
@@ -47,6 +46,8 @@ function initialState() {
     opportunityGeneratedAt: '',
     content: null,
     materialsConfirmed: false,
+    materialComparison: null,
+    editingJob: null,
     matrixResolved: false,
     matrix: null,
     quality: null,
@@ -57,7 +58,9 @@ function initialState() {
     runtime: null,
     backendState: null,
     apiError: '',
+    currentUser: null,
     busy: '',
+    materialOperations: {},
     currentAdvisorId: 'ADV-017',
     currentTaskId: 'TASK-001',
     onboarding: {
@@ -84,10 +87,40 @@ const drawer = document.querySelector('#guide-drawer');
 const drawerMask = document.querySelector('#drawer-mask');
 const toast = document.querySelector('#toast');
 const runtimeStatus = document.querySelector('#runtime-status');
+const materialFileInput = document.createElement('input');
+materialFileInput.type = 'file';
+materialFileInput.className = 'material-file-picker';
+materialFileInput.setAttribute('aria-hidden', 'true');
+document.body.append(materialFileInput);
+let selectedMaterialSlotId = '';
 
 const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value);
 const compact = (value) => value >= 10000 ? `${(value / 10000).toFixed(1)}万` : fmt(value);
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+
+function readMediaMetadata(file) {
+  if (!/^(video|audio|image)\//.test(file.type)) return Promise.resolve({ durationSec: 0, width: 0, height: 0 });
+  const url = URL.createObjectURL(file);
+  return new Promise((resolve) => {
+    const finish = (metadata) => { URL.revokeObjectURL(url); resolve(metadata); };
+    if (file.type.startsWith('image/')) {
+      const image = new Image();
+      image.onload = () => finish({ durationSec: 0, width: image.naturalWidth, height: image.naturalHeight });
+      image.onerror = () => finish({ durationSec: 0, width: 0, height: 0 });
+      image.src = url;
+      return;
+    }
+    const media = document.createElement(file.type.startsWith('video/') ? 'video' : 'audio');
+    media.preload = 'metadata';
+    media.onloadedmetadata = () => finish({
+      durationSec: Number.isFinite(media.duration) ? Number(media.duration.toFixed(2)) : 0,
+      width: media.videoWidth || 0,
+      height: media.videoHeight || 0,
+    });
+    media.onerror = () => finish({ durationSec: 0, width: 0, height: 0 });
+    media.src = url;
+  });
+}
 
 function showToast(message, tone = '') {
   clearTimeout(toastTimer);
@@ -292,6 +325,9 @@ function renderTopics() {
 }
 
 function renderStudio() {
+  if (state.busy === 'content') return `
+    ${header('STEP 03 · CREATE', '正在生成可拍摄内容包', '页面已经进入创作室；模型生成、代码质检和飞书写回通常需要 1—2 分钟。')}
+    <section class="card empty-state"><span>✦</span><h2>创作 Agent 正在工作</h2><p>正在读取画像、任务与品牌知识，生成完整脚本和傻瓜式拍摄要求。即使网络短暂中断，系统也会按内容 ID 从飞书恢复结果。</p><div class="chips"><span>读取上下文</span><span>模型生成</span><span>四重质检</span><span>写回飞书</span></div></section>`;
   if (!state.content) return `<section class="card empty-state"><span>▤</span><h2>还没有内容任务</h2><p>进入机会雷达选择任务后，创作 Agent 会一次性交付完整内容包。</p><button class="primary" data-page="topics">前往机会雷达</button></section>`;
   const c = state.content;
   return `
@@ -303,10 +339,16 @@ function renderStudio() {
     </div>
     <section class="card storyboard"><div class="card-head"><div><span class="eyebrow">STORYBOARD</span><h3>分镜＋字幕＋剪辑时间轴</h3></div><span class="pill">竖屏 9:16 · 约 65 秒</span></div><div class="shot-grid">${c.storyboard.map((shot, index) => `<article><b>0${index + 1}</b><span>${shot.time}</span><strong>${shot.shot}</strong><p>字幕：${shot.subtitle}</p></article>`).join('')}</div><div class="timeline">${c.editTimeline.map((item) => `<span>${item}</span>`).join('')}</div></section>
     <div class="layout two-one">
-      <section class="card material-card"><div class="card-head"><div><span class="eyebrow">MATERIALS</span><h3>顾问只需补充这些真实素材</h3></div><button class="secondary" data-action="confirm-materials">${state.materialsConfirmed ? '✓ 已模拟补齐' : '模拟一键补齐'}</button></div>${c.materials.map((item) => `<div class="material-row"><i>${state.materialsConfirmed || item.status.includes('系统') ? '✓' : '+'}</i><div><strong>${item.label}</strong><span>${state.materialsConfirmed ? '已模拟补充' : item.status}</span></div></div>`).join('')}</section>
+      <section class="card material-card"><div class="card-head"><div><span class="eyebrow">MATERIALS</span><h3>顾问只需补充这些真实素材</h3></div><span class="pill">${state.materialComparison ? `${state.materialComparison.matchedCount}/${state.materialComparison.requiredCount} 已通过` : '上传后后台检查'}</span></div>${c.materials.map((item, index) => {
+        const operation = state.materialOperations[item.slotId] || (item.checkState === 'checking' ? 'checking' : '');
+        const operationLabel = operation === 'uploading' ? '上传中…' : operation === 'checking' ? '后台检查中…' : item.fileName ? '替换素材' : '上传素材';
+        const icon = item.checkState === 'passed' ? '✓' : item.checkState === 'failed' ? '!' : item.checkState === 'checking' ? '…' : index + 1;
+        return `<div class="material-row material-upload-row ${item.checkState}"><i>${icon}</i><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.guide)}</span><small>${escapeHtml(item.status)}</small></div><button class="material-upload-button ${operation ? 'busy' : ''}" data-action="select-material" data-slot-id="${escapeHtml(item.slotId)}" data-accept="${item.accept}" ${operation ? 'disabled' : ''}>${operationLabel}</button></div>`;
+      }).join('')}</section>
       <aside class="card cover-card"><span>封面建议</span><strong>${c.cover}</strong><small>大字不超过 10 个字，保留真实车辆或门店画面</small><h4>评论预案</h4>${c.replyPlan.map((item) => `<p>• ${item}</p>`).join('')}</aside>
     </div>
-    <div class="sticky-next"><div><span>顾问操作负担</span><strong>${state.materialsConfirmed ? '素材已补齐，可直接确认' : '补 3 段素材＋必要轻改'}</strong></div><button class="primary" data-page="quality">进入四重质检 →</button></div>`;
+    ${state.editingJob ? `<section class="card editing-card"><div class="card-head"><div><span class="eyebrow">LOCAL FFMPEG</span><h3>视频剪辑任务</h3></div><span class="pill">${escapeHtml(state.editingJob.status)} · ${Number(state.editingJob.progress) || 0}%</span></div><div class="editing-progress"><i style="width:${Math.max(0, Math.min(100, Number(state.editingJob.progress) || 0))}%"></i></div>${state.editingJob.failureReason ? `<p class="editing-error">${escapeHtml(state.editingJob.failureReason)}</p>` : ''}${['待顾问预览','已完成'].includes(state.editingJob.status) ? `<video class="editing-preview" controls preload="metadata" src="/api/editing/jobs/${encodeURIComponent(state.editingJob.editingJobId)}/preview?v=${encodeURIComponent(state.editingJob.completedAt || state.editingJob.previewFileToken || '1')}"></video>` : ''}</section>` : ''}
+    <div class="sticky-next"><div><span>${state.materialsConfirmed ? '素材已齐全' : '素材准备状态'}</span><strong>${state.editingJob ? `剪辑任务：${escapeHtml(state.editingJob.status)}` : state.materialsConfirmed ? '已形成 JSON3，可以生成预览视频' : '按镜头上传，每上传一个都会自动检查'}</strong></div>${state.materialsConfirmed && state.editingJob ? `<button class="primary" data-action="start-editing" ${state.busy === 'editing' || state.editingJob.status === '剪辑中' ? 'disabled' : ''}>${['待顾问预览','已完成'].includes(state.editingJob.status) ? '重新生成预览' : state.editingJob.status === '失败' ? '重试剪辑' : '生成预览视频'} →</button>` : `<button class="primary" data-page="quality">查看内容质检 →</button>`}</div>`;
 }
 
 function scoreCard(label, value, detail) {
@@ -398,22 +440,122 @@ function apiMatrixToLegacy(quality, content) {
   };
 }
 
-function apiContentToLegacy(content) {
+function apiContentToLegacy(content, requirements = [], assets = []) {
   const tagMap = new Map((state.backendState?.profileTags || []).map((tag) => [tag.tagId, tag.label]));
+  const profileRefs = Array.isArray(content.profileRefs) ? content.profileRefs : [];
+  const factRefs = Array.isArray(content.factRefs) ? content.factRefs : [];
+  const storyboard = Array.isArray(content.storyboard) ? content.storyboard : [];
+  const materials = Array.isArray(content.materials) ? content.materials : [];
   return {
     ...content,
     id: content.contentId,
     topicId: content.taskId,
     body: content.script,
-    usedProfile: content.profileRefs.map((id) => tagMap.get(id) || id),
-    facts: content.factRefs.length
-      ? content.factRefs.map((id) => `已引用有效品牌知识：${id}`)
+    cta: content.cta || '请在评论区留下你最关心的真实使用问题，顾问确认后再回复。',
+    replyPlan: Array.isArray(content.replyPlan) && content.replyPlan.length
+      ? content.replyPlan
+      : ['优先回答脚本已覆盖的问题，并注明真实素材仍待顾问补充。', '涉及价格、权益或试驾安排时由顾问人工确认。'],
+    usedProfile: profileRefs.map((id) => tagMap.get(id) || id),
+    facts: factRefs.length
+      ? factRefs.map((id) => `已引用有效品牌知识：${id}`)
       : ['本选题缺少直接相关的补能品牌事实，所有结果数字均等待顾问实拍补充。'],
-    storyboard: content.storyboard.map((shot, index) => ({ time: `${index * 10}—${Math.min(60, index * 10 + 10)} 秒`, shot, subtitle: '以真实拍摄画面为准' })),
-    materials: content.materials.map((label) => ({ label, status: '待顾问补充' })),
-    cover: content.title.slice(0, 14),
-    editTimeline: content.storyboard.map((shot, index) => `${index * 10}—${Math.min(60, index * 10 + 10)} 秒：${shot}`),
+    storyboard: storyboard.map((shot, index) => ({ time: `${index * 10}—${Math.min(60, index * 10 + 10)} 秒`, shot, subtitle: '以真实拍摄画面为准' })),
+    materials: requirements.length ? requirements.map((requirement) => {
+      const asset = assets.find((item) => item.slotId === requirement.slotId);
+      return {
+        slotId: requirement.slotId,
+        label: requirement.description || requirement.visualDescription,
+        guide: requirement.shootingGuide,
+        status: asset?.status === 'checking' ? '素材已上传，正在后台自动检查' : asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
+        fileName: asset?.fileName || '',
+        checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : asset?.status === 'checking' ? 'checking' : 'waiting',
+        accept: ({ video: 'video/*', image: 'image/*', audio: 'audio/*', text: 'text/plain' })[requirement.type] || '*/*',
+      };
+    }) : materials.map((label, index) => ({ slotId: `legacy-${index}`, label, guide: '按拍摄要求补充真实素材。', status: '待顾问补充', fileName: '', checkState: 'waiting', accept: '*/*' })),
+    cover: (content.title || '').slice(0, 14),
+    editTimeline: storyboard.map((shot, index) => `${index * 10}—${Math.min(60, index * 10 + 10)} 秒：${shot}`),
   };
+}
+
+function applyMaterialResult(data) {
+  const assets = data.json3?.uploadedAssets || [];
+  state.content.materials = data.shootingRequirements.map((requirement) => {
+    const asset = assets.find((item) => item.slotId === requirement.slotId);
+    return {
+      slotId: requirement.slotId,
+      label: requirement.description || requirement.visualDescription,
+      guide: requirement.shootingGuide,
+      status: asset?.status === 'checking' ? '素材已上传，正在后台自动检查' : asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
+      fileName: asset?.fileName || '',
+      checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : asset?.status === 'checking' ? 'checking' : 'waiting',
+      accept: ({ video: 'video/*', image: 'image/*', audio: 'audio/*', text: 'text/plain' })[requirement.type] || '*/*',
+    };
+  });
+  state.materialComparison = data.comparison;
+  state.materialsConfirmed = data.comparison.complete;
+  if (data.editingJob) state.editingJob = data.editingJob;
+}
+
+function applyContentPackage(data) {
+  const assets = data.advisorAssets || data.json3?.uploadedAssets || [];
+  state.content = apiContentToLegacy(data.content, data.shootingRequirements || [], assets);
+  state.materialComparison = data.comparison || {
+    complete: false,
+    requiredCount: (data.shootingRequirements || []).filter((item) => item.required).length,
+    matchedCount: 0,
+    missing: (data.shootingRequirements || []).filter((item) => item.required).map((item) => ({ slotId: item.slotId })),
+    invalid: [],
+    matched: [],
+  };
+  state.materialsConfirmed = state.materialComparison.complete;
+  state.editingJob = data.editingJob || null;
+  const quality = data.quality || data.content?.quality;
+  if (quality) {
+    state.quality = apiQualityToLegacy(quality);
+    state.matrix = apiMatrixToLegacy(quality, state.content);
+    state.matrixResolved = quality.matrix.risk !== '高';
+  }
+}
+
+async function recoverContentPackage(contentId, attempts = 12, delayMs = 5_000) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await oneKosApi.getContentPackage(contentId);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+async function pollMaterialCheck(contentId, slotId, attempts = 90, delayMs = 1_000) {
+  let lastPayload;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const payload = await oneKosApi.getContentMaterials(contentId);
+    lastPayload = payload;
+    const asset = payload.data.json3?.uploadedAssets?.find((item) => item.slotId === slotId);
+    applyMaterialResult(payload.data);
+    render();
+    if (asset && ['available', 'invalid'].includes(asset.status)) return { payload, asset };
+    if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  const error = new Error('后台检查仍在进行，请稍后刷新内容创作室查看结果');
+  error.payload = lastPayload;
+  throw error;
+}
+
+async function pollEditingJob(editingJobId, attempts = 180, delayMs = 2_000) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const payload = await oneKosApi.getEditingJob(editingJobId);
+    state.runtime = payload.runtime;
+    state.editingJob = payload.data;
+    render();
+    if (['待顾问预览', '已完成', '失败'].includes(payload.data.status)) return payload.data;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error('剪辑仍在后台运行，请稍后刷新内容创作室查看');
 }
 
 function apiLeadToLegacy(lead, sourceUser = '模拟用户') {
@@ -486,6 +628,23 @@ async function loadAdvisors() {
   } catch (error) {
     state.onboarding.error = `顾问列表读取失败：${error.message}`;
     if (state.page === 'profile') render();
+  }
+}
+
+async function restoreFeishuIdentity() {
+  try {
+    const payload = await oneKosApi.currentUser();
+    const user = payload.data?.user;
+    if (!payload.data?.authenticated || !user?.advisorId) return;
+    state.currentUser = user;
+    state.currentAdvisorId = user.advisorId;
+    state.onboarding.selectedAdvisorId = user.advisorId;
+    await loadAdvisors();
+    const advisor = state.onboarding.advisors.find((item) => item.advisorId === user.advisorId);
+    if (advisor?.initializationStatus !== 'active') navigate('profile');
+    else render();
+  } catch {
+    // 本地演示与未配置飞书登录时保持现有模拟身份。
   }
 }
 
@@ -688,6 +847,13 @@ document.addEventListener('click', async (event) => {
     drawer.classList.remove('open');
     drawerMask.classList.remove('open');
     drawer.setAttribute('aria-hidden', 'true');
+  } else if (action === 'select-material') {
+    const slotId = target.dataset.slotId;
+    if (!slotId || state.materialOperations[slotId]) return;
+    selectedMaterialSlotId = slotId;
+    materialFileInput.accept = target.dataset.accept || '*/*';
+    materialFileInput.value = '';
+    materialFileInput.click();
   } else if (action === 'select-advisor') {
     const advisor = state.onboarding.advisors.find((item) => item.advisorId === target.dataset.advisorId);
     if (!advisor) return;
@@ -923,40 +1089,64 @@ document.addEventListener('click', async (event) => {
       showToast(`任务拒绝失败：${error.message}`, 'warning');
     }
   } else if (action === 'generate-content') {
+    const contentId = 'CONTENT-WEB-DEMO-001';
     state.busy = 'content';
+    state.apiError = '';
+    navigate('studio');
     showToast('正在读取画像、任务与品牌知识并生成内容…');
     try {
-      const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId, contentId: 'CONTENT-WEB-DEMO-001' });
+      const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId, contentId });
       state.runtime = payload.runtime;
-      state.content = apiContentToLegacy(payload.data.content);
-      state.quality = apiQualityToLegacy(payload.data.quality);
-      state.matrix = apiMatrixToLegacy(payload.data.quality, state.content);
-      state.matrixResolved = payload.data.quality.matrix.risk !== '高';
+      applyContentPackage(payload.data);
       state.apiError = '';
-      navigate('studio');
       showToast(`内容包已生成并${payload.data.write.action === 'created' ? '新建' : '更新'}写回，生成器：${payload.data.generator}`);
     } catch (error) {
-      state.apiError = error.message;
-      state.content = createContentPackage(state.selectedTopic, state.profile);
-      state.matrixResolved = false;
-      state.matrix = inspectMatrix(state.content, false);
-      state.quality = runFourChecks(state.content, state.matrix);
-      navigate('studio');
-      showToast(`服务调用失败，已明确回退本地演示：${error.message}`, 'warning');
+      showToast('连接中断，正在按内容 ID 从飞书恢复已写回结果…', 'warning');
+      try {
+        const recovered = await recoverContentPackage(contentId);
+        state.runtime = recovered.runtime;
+        applyContentPackage(recovered.data);
+        state.apiError = '';
+        showToast('已从飞书恢复内容包，可以继续上传素材');
+      } catch (recoveryError) {
+        state.apiError = `${error.message}；恢复失败：${recoveryError.message}`;
+        state.content = null;
+        showToast(`内容生成或恢复失败：${state.apiError}`, 'warning');
+      }
     } finally {
       state.busy = '';
+      render();
       updateRuntimeBadge();
     }
-  } else if (action === 'confirm-materials') {
-    state.materialsConfirmed = true;
-    render();
-    showToast('已模拟补充真实素材；正式版由顾问上传或勾选现有素材');
   } else if (action === 'copy-content') {
     try {
       await navigator.clipboard.writeText(`${state.content.title}\n\n${state.content.hook}\n\n${state.content.body}\n\n${state.content.cta}`);
       showToast('内容包已复制');
     } catch {
       showToast('浏览器未授予剪贴板权限', 'warning');
+    }
+  } else if (action === 'start-editing') {
+    if (state.busy === 'editing') return;
+    if (!state.editingJob?.editingJobId || !state.materialsConfirmed) {
+      showToast('请先补齐并通过所有必填素材检查', 'warning');
+      return;
+    }
+    state.busy = 'editing';
+    render();
+    showToast('剪辑任务已提交，正在下载飞书素材并生成预览…');
+    try {
+      const started = await oneKosApi.startEditingJob(state.editingJob.editingJobId);
+      state.editingJob = started.data;
+      render();
+      const completed = await pollEditingJob(state.editingJob.editingJobId);
+      const succeeded = ['待顾问预览', '已完成'].includes(completed.status);
+      showToast(succeeded ? '预览视频已生成并写回飞书，等待顾问确认' : `剪辑失败：${completed.failureReason}`, succeeded ? 'success' : 'warning');
+    } catch (error) {
+      showToast(`剪辑任务失败：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+      render();
+      updateRuntimeBadge();
     }
   } else if (action === 'resolve-matrix') {
     state.matrixResolved = true;
@@ -1026,7 +1216,49 @@ document.addEventListener('click', async (event) => {
   }
 });
 
+document.addEventListener('change', async (event) => {
+  if (event.target !== materialFileInput) return;
+  const file = materialFileInput.files?.[0];
+  const slotId = selectedMaterialSlotId;
+  selectedMaterialSlotId = '';
+  materialFileInput.value = '';
+  if (!file || !slotId || !state.content) return;
+  if (file.size > 20 * 1024 * 1024) {
+    showToast('单个素材暂时不能超过 20MB', 'warning');
+    return;
+  }
+
+  state.materialOperations[slotId] = 'uploading';
+  render();
+  showToast(`正在上传 ${file.name}；上传后会在后台检查…`);
+  try {
+    const metadata = await readMediaMetadata(file);
+    const payload = await oneKosApi.uploadAsset(state.content.contentId, slotId, {
+      file,
+      advisorId: state.currentAdvisorId,
+      ...metadata,
+    });
+    state.runtime = payload.runtime;
+    applyMaterialResult(payload.data);
+    state.materialOperations[slotId] = 'checking';
+    render();
+    showToast(`${file.name} 已保存到飞书，后台检查已开始`, 'success');
+    const { payload: checkedPayload, asset: result } = await pollMaterialCheck(state.content.contentId, slotId);
+    state.runtime = checkedPayload.runtime;
+    showToast(result.status === 'available'
+      ? `素材检查通过${checkedPayload.data.comparison.complete ? '，必填素材已齐全' : ''}`
+      : `素材需要重拍：${result.invalidReason}`, result.status === 'available' ? 'success' : 'warning');
+  } catch (error) {
+    showToast(`素材处理失败：${error.message}`, 'warning');
+  } finally {
+    delete state.materialOperations[slotId];
+    render();
+    updateRuntimeBadge();
+  }
+});
+
 render();
 refreshBackendState();
 loadAdvisors();
 resumeQuizSession();
+restoreFeishuIdentity();

@@ -7,6 +7,7 @@ const feishuEnv = {
   FEISHU_APP_ID: 'cli_test',
   FEISHU_APP_SECRET: 'feishu-secret',
   FEISHU_BASE_APP_TOKEN: 'base-token',
+  FEISHU_TABLE_ONBOARDING_SESSIONS: 'tbl-onboarding',
 };
 
 const llmEnv = {
@@ -29,6 +30,12 @@ test('仅配置飞书时判定为 hybrid', () => {
   assert.equal(config.llm.configured, false);
 });
 
+test('飞书真实画像链路要求显式配置问卷会话表', () => {
+  const config = createRuntimeConfig({ ...feishuEnv, FEISHU_TABLE_ONBOARDING_SESSIONS: '' });
+  assert.equal(config.feishu.configured, false);
+  assert.match(config.warnings.join(' '), /问卷会话表/);
+});
+
 test('未配置外部服务时判定为 simulation', () => {
   const config = createRuntimeConfig({});
   assert.equal(config.mode, 'simulation');
@@ -42,5 +49,14 @@ test('公开状态不会泄露密钥', () => {
   assert.equal(serialized.includes('feishu-secret'), false);
   assert.equal(serialized.includes('llm-secret'), false);
   assert.equal(status.feishu.appTokenHint, 'base…oken');
+});
+
+test('视频剪辑路径可由环境变量迁移且公开状态不暴露本机路径', () => {
+  const config = createRuntimeConfig({ FFMPEG_PATH: '/usr/bin/ffmpeg', FFPROBE_PATH: '/usr/bin/ffprobe', VIDEO_WIDTH: '1080', VIDEO_HEIGHT: '1920' });
+  assert.equal(config.video.ffmpegPath, '/usr/bin/ffmpeg');
+  assert.equal(config.video.ffprobePath, '/usr/bin/ffprobe');
+  assert.equal(config.video.width, 1080);
+  assert.equal(toPublicRuntimeStatus(config).video.output, '1080x1920');
+  assert.equal(JSON.stringify(toPublicRuntimeStatus(config)).includes('/usr/bin'), false);
 });
 

@@ -144,7 +144,7 @@ test('飞书仓库读取机会任务池和评论需求信号', async () => {
     async listRecords(tableId) {
       if (tableId === 'tbl-tasks') return [{ record_id: 'rec-task', fields: {
         任务ID: 'TASK-001', 顾问ID: 'ADV-017', 目标车型: '乐道 L60', 用户问题: '没有家充怎么补能？',
-        内容角度: '成都晚高峰补能', 路由匹配分: 88, 矩阵空白: '真实等待时间', 画像证据ID: 'TAG-001｜TAG-002',
+        内容角度: '成都晚高峰补能', 路由匹配分: '88', 矩阵空白: '真实等待时间', 画像证据ID: 'TAG-001｜TAG-002',
         任务日期: '2026-08-09', 状态: '待生成', 路由时间: '2026-08-09T12:00:00.000Z', 顾问决策: 'accept', 拒绝原因: '', 决策时间: '', 模拟数据: '否',
       }}];
       if (tableId === 'tbl-leads') return [{ record_id: 'rec-lead', fields: {
@@ -163,10 +163,75 @@ test('飞书仓库读取机会任务池和评论需求信号', async () => {
   const leadRows = await repository.listCommentLeads('ADV-017');
 
   assert.equal(taskRows[0].taskId, 'TASK-001');
+  assert.equal(taskRows[0].routeScore, 88);
+  assert.equal(typeof taskRows[0].routeScore, 'number');
   assert.deepEqual(taskRows[0].profileEvidence, ['TAG-001', 'TAG-002']);
   assert.equal(taskRows[0].routedAt, '2026-08-09T12:00:00.000Z');
   assert.equal(taskRows[0].decision, 'accept');
   assert.equal(leadRows[0].originalComment, '没有家充，每天通勤怎么补能？');
   assert.equal(leadRows[0].grade, 'A');
+});
+
+test('飞书仓库把顾问档案中的数字文本规范化为数字', async () => {
+  const client = {
+    async findRecordByField() {
+      return { record_id: 'rec-advisor', fields: {
+        顾问ID: 'ADV-017', 展示名称: '顾问 017', 从业年限: '4', 画像成熟度: '78', 模拟数据: '否',
+      }};
+    },
+  };
+  const repository = new FeishuOneKosRepository({ client, tableIds: { advisors: 'tbl-advisors' } });
+
+  const advisor = await repository.getAdvisor('ADV-017');
+
+  assert.equal(advisor.experienceYears, 4);
+  assert.equal(advisor.profileMaturity, 78);
+  assert.equal(typeof advisor.experienceYears, 'number');
+  assert.equal(typeof advisor.profileMaturity, 'number');
+});
+
+test('飞书仓库更新旧版顾问时不提交不存在的可选画像字段', async () => {
+  let writtenFields;
+  const client = {
+    async upsertByField(tableId, field, value, fields) {
+      writtenFields = fields;
+      return { action: 'updated', record: { record_id: 'rec-advisor', fields } };
+    },
+  };
+  const repository = new FeishuOneKosRepository({ client, tableIds: { advisors: 'tbl-advisors' } });
+
+  await repository.saveAdvisor({
+    advisorId: 'ADV-017', displayName: '顾问 017', city: '成都', store: '成都门店',
+    experienceYears: 4, targetAudience: '城市通勤家庭', profileMaturity: 78,
+    workflowStatus: '待生成', authorizationStatus: '已授权', simulation: false,
+  });
+
+  assert.equal(writtenFields.流程状态, '待生成');
+  assert.equal('外部用户标识' in writtenFields, false);
+  assert.equal('首次初始化时间' in writtenFields, false);
+  assert.equal('初始化状态' in writtenFields, false);
+});
+
+test('剪辑完成写回附件、Token 与飞书毫秒时间', async () => {
+  let writtenFields;
+  const client = {
+    async upsertByField(tableId, field, value, fields) {
+      writtenFields = fields;
+      return { action: 'created', record: { record_id: 'rec-render', fields } };
+    },
+  };
+  const repository = new FeishuOneKosRepository({ client, tableIds: { editingJobs: 'tbl-editing' } });
+  await repository.saveEditingJob({
+    editingJobId: 'RENDER-001', contentId: 'CONTENT-001', contentVersion: 1, assetIds: ['ASSET-001'],
+    editingPlan: { shots: [] }, editor: '本地 FFmpeg', status: '待顾问预览', progress: 100,
+    failureReason: '', retryCount: 0, previewFileToken: 'box-preview', finalFileToken: null,
+    advisorConfirmationStatus: '待确认', completedAt: '2026-08-10T06:00:00.000Z', simulation: false,
+  });
+
+  assert.deepEqual(writtenFields.预览视频, [{ file_token: 'box-preview' }]);
+  assert.equal(writtenFields.预览视频Token, 'box-preview');
+  assert.equal(writtenFields.最终视频, undefined);
+  assert.equal(writtenFields.完成时间, Date.parse('2026-08-10T06:00:00.000Z'));
+  assert.equal(writtenFields.模拟数据, '否');
 });
 

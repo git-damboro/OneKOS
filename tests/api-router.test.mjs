@@ -37,18 +37,82 @@ test('内容生成、评论分析与反馈确认路由到业务服务', async ()
   const calls = [];
   const service = {
     async generateContent(body) { calls.push(['content', body]); return { content: { contentId: body.contentId } }; },
+    async getContentPackage(contentId) { calls.push(['get-content', contentId]); return { content: { contentId }, recovered: true }; },
+    async runProductionDemo(body) { calls.push(['production', body]); return { comparison: { complete: true } }; },
     async analyzeComment(body) { calls.push(['comment', body]); return { lead: { grade: 'A' } }; },
     async confirmFeedback(eventId) { calls.push(['feedback', eventId]); return { applied: true }; },
   };
   await withServer(service, async (baseUrl) => {
     const generated = await jsonPost(`${baseUrl}/api/content/generate`, { contentId: 'CONTENT-1' }).then((response) => response.json());
+    const recovered = await fetch(`${baseUrl}/api/content/CONTENT-1`).then((response) => response.json());
+    const production = await jsonPost(`${baseUrl}/api/production/demo`, { contentId: 'CONTENT-2' }).then((response) => response.json());
     const analyzed = await jsonPost(`${baseUrl}/api/comments/analyze`, { commentId: 'COMMENT-1', text: '想试驾' }).then((response) => response.json());
     const confirmed = await jsonPost(`${baseUrl}/api/feedback/EVENT-1/confirm`, {}).then((response) => response.json());
     assert.equal(generated.data.content.contentId, 'CONTENT-1');
+    assert.equal(recovered.data.recovered, true);
+    assert.equal(production.data.comparison.complete, true);
     assert.equal(analyzed.data.lead.grade, 'A');
     assert.equal(confirmed.data.applied, true);
-    assert.deepEqual(calls.map((item) => item[0]), ['content', 'comment', 'feedback']);
+    assert.deepEqual(calls.map((item) => item[0]), ['content', 'get-content', 'production', 'comment', 'feedback']);
   });
+});
+
+test('素材上传路由解析 multipart 并传递素材槽位与媒体元数据', async () => {
+  const calls = [];
+  let finishCheck;
+  const checkCompleted = new Promise((resolve) => { finishCheck = resolve; });
+  const service = {
+    async getContentMaterials(contentId) { return { contentId, comparison: { complete: false } }; },
+    async stageAdvisorAssetUpload(input) { calls.push(['stage', input]); return { uploadedAsset: { status: 'checking' } }; },
+    async checkAdvisorAsset(input) { calls.push(['check', input]); finishCheck(); return { checkedAsset: { status: 'available' } }; },
+  };
+  await withServer(service, async (baseUrl) => {
+    const materials = await fetch(`${baseUrl}/api/content/CONTENT-1/materials`).then((response) => response.json());
+    assert.equal(materials.data.contentId, 'CONTENT-1');
+
+    const form = new FormData();
+    form.set('file', new Blob([new Uint8Array([1, 2, 3])], { type: 'video/mp4' }), 'opening.mp4');
+    form.set('advisorId', 'ADV-017');
+    form.set('durationSec', '9.5');
+    form.set('width', '1080');
+    form.set('height', '1920');
+    const response = await fetch(`${baseUrl}/api/content/CONTENT-1/assets/CONTENT-1-SLOT-001`, { method: 'POST', body: form });
+    assert.equal(response.status, 202);
+    assert.equal((await response.json()).data.uploadedAsset.status, 'checking');
+    await checkCompleted;
+  });
+
+  assert.deepEqual(calls.map(([phase]) => phase), ['stage', 'check']);
+  assert.equal(calls[0][1].contentId, 'CONTENT-1');
+  assert.equal(calls[0][1].slotId, 'CONTENT-1-SLOT-001');
+  assert.equal(calls[0][1].advisorId, 'ADV-017');
+  assert.equal(calls[0][1].fileName, 'opening.mp4');
+  assert.equal(calls[0][1].durationSec, 9.5);
+  assert.equal(calls[0][1].bytes.byteLength, 3);
+});
+
+test('剪辑任务支持异步启动、状态查询和 MP4 预览', async () => {
+  const calls = [];
+  const service = {
+    async startEditingJob(editingJobId) { calls.push(['start', editingJobId]); return { editingJobId, status: '待剪辑' }; },
+    async getEditingJob(editingJobId) { calls.push(['get', editingJobId]); return { editingJobId, status: '待顾问预览', progress: 100 }; },
+    async getEditingPreview(editingJobId) { calls.push(['preview', editingJobId]); return new Uint8Array([0, 1, 2, 3, 4, 5]); },
+  };
+  await withServer(service, async (baseUrl) => {
+    const started = await jsonPost(`${baseUrl}/api/editing/jobs/RENDER-1/start`, {}).then((response) => response.json());
+    const status = await fetch(`${baseUrl}/api/editing/jobs/RENDER-1`).then((response) => response.json());
+    const preview = await fetch(`${baseUrl}/api/editing/jobs/RENDER-1/preview`);
+    const partial = await fetch(`${baseUrl}/api/editing/jobs/RENDER-1/preview`, { headers: { Range: 'bytes=2-4' } });
+    assert.equal(started.data.status, '待剪辑');
+    assert.equal(status.data.progress, 100);
+    assert.equal(preview.headers.get('content-type'), 'video/mp4');
+    assert.equal(preview.headers.get('accept-ranges'), 'bytes');
+    assert.deepEqual([...new Uint8Array(await preview.arrayBuffer())], [0, 1, 2, 3, 4, 5]);
+    assert.equal(partial.status, 206);
+    assert.equal(partial.headers.get('content-range'), 'bytes 2-4/6');
+    assert.deepEqual([...new Uint8Array(await partial.arrayBuffer())], [2, 3, 4]);
+  });
+  assert.deepEqual(calls, [['start', 'RENDER-1'], ['get', 'RENDER-1'], ['preview', 'RENDER-1'], ['preview', 'RENDER-1']]);
 });
 
 test('非法 JSON、未知 API 与业务错误返回统一结构', async () => {
