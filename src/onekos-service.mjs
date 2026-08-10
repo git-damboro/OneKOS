@@ -378,9 +378,15 @@ export class OneKosService {
         this.repository.getProfileTags(session.advisorId),
         this.repository.getTask(session.taskId),
       ]);
-      return { advisor, tags: tags.filter((tag) => tag.profileVersion === session.profileVersion), task, session, idempotent: true };
+      return {
+        advisor,
+        tags: tags.filter((tag) => tag.profileVersion == null || tag.profileVersion === '' || Number(tag.profileVersion) === Number(session.profileVersion)),
+        task,
+        session,
+        idempotent: true,
+      };
     }
-    if (!['generated', 'write_failed'].includes(session.status)) {
+    if (!['generated', 'confirming', 'write_failed'].includes(session.status)) {
       const error = new Error('当前初始化会话尚未生成候选画像');
       error.statusCode = 409;
       throw error;

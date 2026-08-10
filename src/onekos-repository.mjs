@@ -453,11 +453,11 @@ export class FeishuOneKosRepository {
       模拟数据: advisor.simulation ? '是' : '否',
     };
     if (advisor.initializationStatus !== undefined) fields.初始化状态 = advisor.initializationStatus;
-    if (advisor.profileVersion !== undefined) fields.当前画像版本 = advisor.profileVersion;
+    if (advisor.profileVersion !== undefined) fields.当前画像版本 = number(advisor.profileVersion);
     if (advisor.identitySource !== undefined) fields.身份来源 = advisor.identitySource;
     if (advisor.externalUserId !== undefined) fields.外部用户标识 = advisor.externalUserId || '';
     if (advisor.initializedAt !== undefined) fields.首次初始化时间 = advisor.initializedAt || '';
-    const result = await this.client.upsertByField(this.tableIds.advisors, '顾问ID', advisor.advisorId, fields);
+    const result = await this.upsertByField(this.tableIds.advisors, '顾问ID', advisor.advisorId, fields, ['初始化状态', '当前画像版本', '身份来源', '外部用户标识', '首次初始化时间']);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
 
@@ -468,7 +468,7 @@ export class FeishuOneKosRepository {
       写入进度: json(session.writeProgress || {}), 生成方式: session.generator || '',
       警告: json(session.warnings || []), 最近错误: session.lastError || '',
       创建时间: session.createdAt || '', 更新时间: session.updatedAt || '', 确认时间: session.confirmedAt || '',
-      画像版本: session.profileVersion || '', 首条任务ID: session.taskId || '',
+      画像版本: session.profileVersion ? String(session.profileVersion) : '', 首条任务ID: session.taskId || '',
       模拟数据: session.simulation ? '是' : '否',
     };
     const result = await this.client.upsertByField(this.tableIds.onboardingSessions, '会话ID', session.sessionId, fields);
@@ -623,7 +623,7 @@ export class FeishuOneKosRepository {
   }
 
   async saveProfileTag(tag) {
-    const fields = { 标签ID: tag.tagId, 顾问ID: tag.advisorId, 画像版本: tag.profileVersion, 维度: tag.dimension, 标签: tag.label, 状态: tag.status, 置信度: tag.confidence, 权重: tag.weight, 来源: tag.source, 来源引用: (tag.sourceRefs || []).join('｜'), 证据: tag.evidence, 更新时间: tag.updatedAt, 模拟数据: tag.simulation ? '是' : '否' };
+    const fields = { 标签ID: tag.tagId, 顾问ID: tag.advisorId, 画像版本: tag.profileVersion, 维度: tag.dimension, 标签: tag.label, 状态: tag.status, 置信度: tag.confidence, 权重: tag.weight, 来源: tag.source, 来源引用: (tag.sourceRefs || []).join('｜'), 证据: lines(tag.evidence), 更新时间: tag.updatedAt, 模拟数据: tag.simulation ? '是' : '否' };
     const result = await this.upsertByField(this.tableIds.profileTags, '标签ID', tag.tagId, fields, ['画像版本', '来源引用']);
     return { action: result.action, recordId: result.record?.record_id, record: result.record };
   }
