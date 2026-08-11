@@ -38,6 +38,25 @@ function asList(value) {
   return value ? [String(value)] : [];
 }
 
+function contentIdForTask(taskId) {
+  const normalized = String(taskId || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return `CONTENT-${normalized || 'UNTITLED'}`;
+}
+
+function latestTask(tasks) {
+  return [...tasks].sort((left, right) => {
+    const leftTime = Date.parse(left.decidedAt || left.routedAt || left.taskDate || '') || 0;
+    const rightTime = Date.parse(right.decidedAt || right.routedAt || right.taskDate || '') || 0;
+    return rightTime - leftTime || String(right.taskId).localeCompare(String(left.taskId));
+  })[0] || null;
+}
+
+function contentForTask(task, contents) {
+  if (!task) return null;
+  const matching = contents.filter((item) => item.taskId === task.taskId);
+  return matching.find((item) => item.contentId === contentIdForTask(task.taskId)) || matching.at(-1) || null;
+}
+
 function editingContentFromRequirements(content, requirements) {
   const required = requirements.filter((item) => item.required).sort((a, b) => a.shotOrder - b.shotOrder || a.slotId.localeCompare(b.slotId));
   return {
@@ -541,10 +560,60 @@ export class OneKosService {
     return { ...context, feedbackEvents, commentLeads };
   }
 
-  async generateContent({ advisorId = 'ADV-017', taskId = 'TASK-001', contentId = 'CONTENT-DEMO-001' } = {}) {
+  async getAdvisorWorkspace(advisorId) {
+    const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
+    const [tasks, contents] = await Promise.all([
+      this.repository.listContentTasks(advisorId),
+      this.repository.listContentResults(),
+    ]);
+    const acceptedTasks = tasks.filter((task) => task.decision === 'accept');
+    const acceptedTask = latestTask(acceptedTasks);
+    const taskWithContent = latestTask(tasks.filter((task) => contents.some((content) => content.taskId === task.taskId)));
+    const task = acceptedTask || taskWithContent;
+    const content = contentForTask(task, contents);
+    let contentPackage = null;
+    let recoveryWarning = '';
+    if (content) {
+      try {
+        contentPackage = await this.getContentPackage(content.contentId);
+      } catch (error) {
+        if (error?.statusCode !== 404) throw error;
+        recoveryWarning = `已有内容 ${content.contentId} 缺少完整拍摄要求，可从已接受任务重新生成`;
+      }
+    }
+    return {
+      advisor,
+      task,
+      acceptedTasks: [...acceptedTasks].sort((left, right) => {
+        const leftTime = Date.parse(left.decidedAt || left.routedAt || left.taskDate || '') || 0;
+        const rightTime = Date.parse(right.decidedAt || right.routedAt || right.taskDate || '') || 0;
+        return rightTime - leftTime;
+      }).map((accepted) => {
+        const savedContent = contentForTask(accepted, contents);
+        return {
+          ...accepted,
+          contentId: savedContent?.contentId || '',
+          contentStatus: savedContent?.status || '',
+          hasContent: Boolean(savedContent),
+        };
+      }),
+      contentPackage,
+      stage: contentPackage ? contentPackage.status : task ? 'accepted_waiting_generation' : 'waiting_opportunity',
+      recoveryWarning,
+    };
+  }
+
+  async generateContent({ advisorId = 'ADV-017', taskId = 'TASK-001', contentId: requestedContentId } = {}) {
     const context = await this.getAdvisorContext({ advisorId, taskId });
     if (context.task.status !== '待生成') {
       const error = new Error(`任务 ${taskId} 尚未被顾问接受，不能生成内容`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const contentId = requestedContentId || contentIdForTask(taskId);
+    const existingContent = await this.repository.getContentResult(contentId);
+    if (existingContent && existingContent.taskId !== taskId) {
+      const error = new Error(`内容ID ${contentId} 已属于任务 ${existingContent.taskId}，不能由任务 ${taskId} 覆盖`);
       error.statusCode = 409;
       throw error;
     }

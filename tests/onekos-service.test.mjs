@@ -138,6 +138,56 @@ test('生成内容并按内容 ID 幂等写回', async () => {
   assert.equal(repository.snapshot().shootingRequirements.length, first.shootingRequirements.length);
 });
 
+test('工作台按顾问恢复已接受任务，并在生成后恢复同一任务的完整内容包', async () => {
+  const { service } = createService();
+  await service.decideOpportunity('TASK-001', { advisorId: 'ADV-017', decision: 'accept' });
+
+  const accepted = await service.getAdvisorWorkspace('ADV-017');
+  assert.equal(accepted.task.taskId, 'TASK-001');
+  assert.equal(accepted.stage, 'accepted_waiting_generation');
+  assert.equal(accepted.contentPackage, null);
+
+  const generated = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001' });
+  assert.equal(generated.content.contentId, 'CONTENT-TASK-001');
+  const restored = await service.getAdvisorWorkspace('ADV-017');
+  assert.equal(restored.task.taskId, 'TASK-001');
+  assert.equal(restored.contentPackage.content.contentId, 'CONTENT-TASK-001');
+  assert.equal(restored.contentPackage.shootingRequirements.length, generated.shootingRequirements.length);
+});
+
+test('工作台遇到旧内容缺少拍摄要求时仍恢复已接受任务', async () => {
+  const { service, repository } = createService();
+  await service.decideOpportunity('TASK-001', { advisorId: 'ADV-017', decision: 'accept' });
+  await repository.saveContentPackage({ contentId: 'CONTENT-LEGACY-001', taskId: 'TASK-001', advisorId: 'ADV-017', status: '待顾问补真实素材' });
+
+  const restored = await service.getAdvisorWorkspace('ADV-017');
+  assert.equal(restored.task.taskId, 'TASK-001');
+  assert.equal(restored.stage, 'accepted_waiting_generation');
+  assert.equal(restored.contentPackage, null);
+  assert.match(restored.recoveryWarning, /缺少完整拍摄要求/);
+});
+
+test('工作台同一任务存在多个内容时优先恢复任务派生的标准内容 ID', async () => {
+  const { service, repository } = createService();
+  await service.decideOpportunity('TASK-001', { advisorId: 'ADV-017', decision: 'accept' });
+  await repository.saveContentPackage({ contentId: 'CONTENT-LEGACY-001', taskId: 'TASK-001', advisorId: 'ADV-017', status: '待顾问补真实素材' });
+  const generated = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001' });
+
+  const restored = await service.getAdvisorWorkspace('ADV-017');
+  assert.equal(generated.content.contentId, 'CONTENT-TASK-001');
+  assert.equal(restored.contentPackage.content.contentId, 'CONTENT-TASK-001');
+  assert.equal(restored.acceptedTasks[0].contentId, 'CONTENT-TASK-001');
+  assert.equal(restored.acceptedTasks[0].hasContent, true);
+});
+
+test('内容 ID 已属于其他任务时拒绝覆盖', async () => {
+  const { service } = createService();
+  await assert.rejects(
+    service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-SEED-L90' }),
+    (error) => error.statusCode === 409 && /已属于任务/.test(error.message),
+  );
+});
+
 test('配置模型时使用模型候选结果，但仍由服务端质检和落库', async () => {
   let calls = 0;
   const llmClient = {

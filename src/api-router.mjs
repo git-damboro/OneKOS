@@ -182,6 +182,12 @@ export function createApiHandler({ service, runtimeStatus, authClient = null, au
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }
+      const advisorWorkspaceMatch = request.method === 'GET' && url.pathname.match(/^\/api\/advisors\/([^/]+)\/workspace$/);
+      if (advisorWorkspaceMatch) {
+        const data = await service.getAdvisorWorkspace(decodeURIComponent(advisorWorkspaceMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
       if (request.method === 'POST' && url.pathname === '/api/onboarding/quiz-sessions') {
         const data = await service.createQuizSession(await readJsonBody(request));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);

@@ -177,6 +177,24 @@ test('顾问与初始化 API 完整路由到服务并传递确认幂等键', asy
   }]);
 });
 
+test('顾问工作台 API 恢复已接受任务和已有内容包', async () => {
+  const calls = [];
+  const service = {
+    async getAdvisorWorkspace(advisorId) {
+      calls.push(advisorId);
+      return { task: { taskId: 'TASK-001', decision: 'accept' }, contentPackage: null, stage: 'accepted_waiting_generation' };
+    },
+  };
+  await withServer(service, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/advisors/${encodeURIComponent('ADV/017')}/workspace`);
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.task.taskId, 'TASK-001');
+    assert.equal(payload.data.stage, 'accepted_waiting_generation');
+  });
+  assert.deepEqual(calls, ['ADV/017']);
+});
+
 test('不存在的初始化会话保持统一 404 错误结构', async () => {
   const service = {
     async getOnboardingSession() {

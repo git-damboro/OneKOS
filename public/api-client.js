@@ -41,6 +41,7 @@ export const oneKosApi = {
   health: () => request('/api/health', { timeoutMs: 10_000 }),
   currentUser: () => request('/api/auth/me', { timeoutMs: 10_000 }),
   listAdvisors: () => request('/api/advisors'),
+  getAdvisorWorkspace: (advisorId) => request(`/api/advisors/${encodeURIComponent(advisorId)}/workspace`, { timeoutMs: 60_000 }),
   createAdvisor: (input) => request('/api/advisors', { method: 'POST', body: input }),
   createQuizSession: (input) => request('/api/onboarding/quiz-sessions', { method: 'POST', body: input }),
   getQuizSession: (sessionId) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}`),

@@ -41,6 +41,8 @@ function initialState() {
     calibrated: false,
     topics: [],
     selectedTopic: null,
+    acceptedTasks: [],
+    studioSelectedTaskId: '',
     opportunitySummary: { profileSignals: 0, taskPool: 0, demandSignals: 0, matrixCorpus: 0 },
     opportunitySource: '',
     opportunityGeneratedAt: '',
@@ -80,6 +82,8 @@ function initialState() {
 
 let state = initialState();
 let toastTimer;
+let materialRequestSequence = 0;
+let materialAppliedSequence = 0;
 const app = document.querySelector('#app');
 const pageTitle = document.querySelector('#page-title');
 const breadcrumb = document.querySelector('#breadcrumb');
@@ -321,18 +325,25 @@ function renderTopics() {
         ${state.topics.length ? state.topics.map((topic, index) => `<article class="topic-card ${state.selectedTopic?.id === topic.id ? 'selected' : ''}"><div class="topic-top"><span>推荐 ${index + 1} · ${escapeHtml(topic.status || '候选')}</span><b>${topic.score} 路由分</b></div><h3>${escapeHtml(topic.title)}</h3><p>${escapeHtml(topic.need)}</p><div class="chips">${topic.matched.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('') || '<span>画像证据待增强</span>'}</div><div class="score-breakdown"><span>画像 ${topic.scoreBreakdown.profile}</span><span>需求 ${topic.scoreBreakdown.demand}</span><span>矩阵 ${topic.scoreBreakdown.matrix}</span></div><div class="reason"><strong>为什么推荐</strong><p>${escapeHtml(topic.why)}</p><small>矩阵空白：${escapeHtml(topic.matrixGap || '由历史内容自动计算')}</small>${topic.demandEvidence.length ? `<p>需求证据：${escapeHtml(topic.demandEvidence[0])}</p>` : ''}</div><div class="topic-actions"><button class="primary" data-action="accept-opportunity" data-task-id="${escapeHtml(topic.taskId)}">${state.selectedTopic?.taskId === topic.taskId ? '✓ 已接受' : '接受任务'}</button><button data-action="reject-opportunity" data-task-id="${escapeHtml(topic.taskId)}">拒绝</button></div></article>`).join('') : `<section class="card empty-state"><span>✦</span><h3>当前没有可推荐任务</h3><p>任务池没有当前顾问可处理的候选记录。请先在 ContentTasks 中添加任务，或由画像初始化创建首条任务。</p><button class="primary" data-action="route-opportunities">重新读取实际任务池</button></section>`}
       </section>
     </div>
-    ${state.selectedTopic ? `<div class="sticky-next"><div><span>已接受并写回</span><strong>${escapeHtml(state.selectedTopic.title)}</strong></div><button class="primary" data-action="generate-content">交给创作 Agent →</button></div>` : ''}`;
+    ${state.selectedTopic ? `<div class="sticky-next"><div><span>已接受并写回</span><strong>${escapeHtml(state.selectedTopic.title)}</strong></div><button class="primary" data-page="studio">进入内容创作室 →</button></div>` : ''}`;
 }
 
 function renderStudio() {
-  if (state.busy === 'content') return `
-    ${header('STEP 03 · CREATE', '正在生成可拍摄内容包', '页面已经进入创作室；模型生成、代码质检和飞书写回通常需要 1—2 分钟。')}
-    <section class="card empty-state"><span>✦</span><h2>创作 Agent 正在工作</h2><p>正在读取画像、任务与品牌知识，生成完整脚本和傻瓜式拍摄要求。即使网络短暂中断，系统也会按内容 ID 从飞书恢复结果。</p><div class="chips"><span>读取上下文</span><span>模型生成</span><span>四重质检</span><span>写回飞书</span></div></section>`;
-  if (!state.content) return `<section class="card empty-state"><span>▤</span><h2>还没有内容任务</h2><p>进入机会雷达选择任务后，创作 Agent 会一次性交付完整内容包。</p><button class="primary" data-page="topics">前往机会雷达</button></section>`;
+  if (state.busy === 'content' || state.busy === 'content-read') return `
+    ${header('STEP 03 · CREATE', state.busy === 'content-read' ? '正在读取上次内容' : '正在生成可拍摄内容包', state.busy === 'content-read' ? '正在按任务与内容成果的真实关联读取飞书记录。' : '模型生成、代码质检和飞书写回通常需要 1—2 分钟。')}
+    <section class="card empty-state"><span>✦</span><h2>正在读取内容包</h2><p>系统会先按任务 ID 读取飞书中的已有成果并直接展示；只有尚未生成内容时，才会继续调用模型、质检并写回飞书。</p><div class="chips"><span>读取已有成果</span><span>必要时模型生成</span><span>四重质检</span><span>写回飞书</span></div></section>`;
+  if (!state.studioSelectedTaskId) return `
+    ${header('STEP 03 · CREATE', '已经接收的任务', '这里直接读取飞书中的接受结果。选择一项后，系统只打开该任务上一次保存的内容成果。')}
+    <section class="topics-panel">${state.acceptedTasks.length ? state.acceptedTasks.map((task, index) => `<article class="topic-card"><div class="topic-top"><span>已接收 ${index + 1} · ${escapeHtml(task.status || '待生成')}</span><b>${Number(task.score || task.routeScore) || 0} 路由分</b></div><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.need)}</p><div class="chips">${task.matched.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('') || '<span>画像证据待增强</span>'}</div><div class="score-breakdown"><span>画像 ${task.scoreBreakdown?.profile || 0}</span><span>需求 ${task.scoreBreakdown?.demand || 0}</span><span>矩阵 ${task.scoreBreakdown?.matrix || 0}</span></div><div class="reason"><strong>为什么推荐</strong><p>${escapeHtml(task.why || '任务已由顾问接收并写回飞书。')}</p><small>${task.hasContent ? `已有内容：${escapeHtml(task.contentId)}` : '当前尚无内容成果'}</small></div><div class="topic-actions"><button class="primary" data-action="open-accepted-task" data-task-id="${escapeHtml(task.taskId)}">${task.hasContent ? '读取上次内容' : '查看任务'}</button></div></article>`).join('') : `<section class="card empty-state"><span>▤</span><h2>还没有已接收任务</h2><p>请先到机会雷达选择并接收任务。</p><button class="primary" data-page="topics">前往机会雷达</button></section>`}</section>`;
+  const studioTask = state.acceptedTasks.find((task) => task.taskId === state.studioSelectedTaskId);
+  if (!state.content && studioTask) return `
+    ${header('STEP 03 · CREATE', '任务尚无内容成果', '该任务已经接收，但飞书“内容成果”表中还没有对应记录。系统没有自动调用模型。', '<button class="secondary" data-action="back-accepted-tasks">返回已接收任务</button>')}
+    <section class="card empty-state"><span>✓</span><h2>${escapeHtml(studioTask.title)}</h2><p>${escapeHtml(studioTask.need)}</p><div class="chips"><span>${escapeHtml(studioTask.taskId)}</span><span>已接收</span><span>尚未生成</span></div><button class="primary" data-action="generate-content">明确生成新内容 →</button></section>`;
+  if (!state.content) return `<section class="card empty-state"><span>▤</span><h2>没有可读取的任务</h2><button class="primary" data-action="back-accepted-tasks">返回已接收任务</button></section>`;
   const c = state.content;
   return `
     ${simulationNote(state.content.generator === 'external-llm' ? '内容候选由外部兼容模型生成，并由 OneKOS 服务执行事实、合规、人设、矩阵质检；真实素材仍由顾问补充。' : '内容由本地确定性规则生成；顾问真实经历和拍摄素材均显示为“待补充”，不会由 AI 编造。')}
-    ${header('STEP 03 · CREATE', '从选题到可拍摄内容包，一次交付', '事实核保证品牌信息统一，人格壳保留顾问的原话、经历与目标用户表达。', '<button class="secondary" data-action="copy-content">复制内容包</button>')}
+    ${header('STEP 03 · CREATE', '从选题到可拍摄内容包，一次交付', '事实核保证品牌信息统一，人格壳保留顾问的原话、经历与目标用户表达。', '<button class="secondary" data-action="back-accepted-tasks">返回已接收任务</button><button class="secondary" data-action="copy-content">复制内容包</button>')}
     <div class="content-layout">
       <section class="card script-card"><div class="content-title"><span>标题</span><h2>${c.title}</h2><div class="chips">${c.usedProfile.map((item) => `<span>${item}</span>`).join('')}</div></div><article class="script-block hook"><span>前 5 秒开场</span><p>${c.hook}</p></article><article class="script-block"><span>完整口播</span><p>${c.body}</p></article><article class="script-block cta"><span>评论区转化动作</span><p>${c.cta}</p></article></section>
       <aside class="card fact-card"><span class="eyebrow">FACT CORE</span><h3>事实核与来源门禁</h3>${c.facts.map((fact) => `<div class="fact-line"><i>✓</i><span>${fact}</span></div>`).join('')}<hr>${brandKnowledge.slice(0, 2).map((item) => `<div class="knowledge-item"><strong>${item.model} · ${item.field}</strong><span>${item.value}</span><small>${item.source}<br>核验 ${item.checkedAt} · 有效至 ${item.validUntil}</small></div>`).join('')}</aside>
@@ -477,7 +488,29 @@ function apiContentToLegacy(content, requirements = [], assets = []) {
   };
 }
 
+function contentIdForTask(taskId) {
+  const normalized = String(taskId || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return `CONTENT-${normalized || 'UNTITLED'}`;
+}
+
+function apiTaskToTopic(task) {
+  if (!task) return null;
+  return {
+    ...task,
+    id: task.taskId,
+    title: task.topic,
+    need: task.userQuestion,
+    score: Number(task.score || task.routeScore) || 0,
+    matched: task.matchedProfileTags || task.profileEvidence || [],
+    profileTags: task.matchedProfileTags || task.profileEvidence || [],
+    demandEvidence: task.demandEvidence || [],
+    scoreBreakdown: task.scoreBreakdown || { profile: Number(task.routeScore) || 0, demand: 0, matrix: 0 },
+    why: task.why || `该任务已于 ${task.decidedAt ? new Date(task.decidedAt).toLocaleString('zh-CN') : '飞书记录时间'} 接收。`,
+  };
+}
+
 function applyMaterialResult(data) {
+  if (!state.content || data.contentId !== state.content.contentId) return false;
   const assets = data.json3?.uploadedAssets || [];
   state.content.materials = data.shootingRequirements.map((requirement) => {
     const asset = assets.find((item) => item.slotId === requirement.slotId);
@@ -494,6 +527,7 @@ function applyMaterialResult(data) {
   state.materialComparison = data.comparison;
   state.materialsConfirmed = data.comparison.complete;
   if (data.editingJob) state.editingJob = data.editingJob;
+  return true;
 }
 
 function applyContentPackage(data) {
@@ -533,11 +567,15 @@ async function recoverContentPackage(contentId, attempts = 12, delayMs = 5_000) 
 async function pollMaterialCheck(contentId, slotId, attempts = 90, delayMs = 1_000) {
   let lastPayload;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const requestSequence = ++materialRequestSequence;
     const payload = await oneKosApi.getContentMaterials(contentId);
     lastPayload = payload;
     const asset = payload.data.json3?.uploadedAssets?.find((item) => item.slotId === slotId);
-    applyMaterialResult(payload.data);
-    render();
+    if (requestSequence >= materialAppliedSequence && state.content?.contentId === contentId) {
+      materialAppliedSequence = requestSequence;
+      applyMaterialResult(payload.data);
+      render();
+    }
     if (asset && ['available', 'invalid'].includes(asset.status)) return { payload, asset };
     if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
@@ -631,6 +669,33 @@ async function loadAdvisors() {
   }
 }
 
+function applyWorkspacePayload(data) {
+  const task = apiTaskToTopic(data.task);
+  state.selectedTopic = task;
+  if (task) state.currentTaskId = task.taskId;
+  state.acceptedTasks = (data.acceptedTasks || (data.task ? [data.task] : [])).map(apiTaskToTopic);
+  state.studioSelectedTaskId = '';
+  state.content = null;
+  state.materialComparison = null;
+  state.materialsConfirmed = false;
+  state.editingJob = null;
+}
+
+async function resumeAdvisorWorkspace({ notify = false } = {}) {
+  if (!state.currentAdvisorId) return;
+  try {
+    const payload = await oneKosApi.getAdvisorWorkspace(state.currentAdvisorId);
+    state.runtime = payload.runtime;
+    applyWorkspacePayload(payload.data);
+    state.apiError = '';
+    if (state.page === 'studio' || state.page === 'topics') render();
+    if (notify && state.acceptedTasks.length) showToast(`已读取 ${state.acceptedTasks.length} 个已接收任务`);
+  } catch (error) {
+    state.apiError = error.message;
+    if (notify) showToast(`工作台恢复失败：${error.message}`, 'warning');
+  }
+}
+
 async function restoreFeishuIdentity() {
   try {
     const payload = await oneKosApi.currentUser();
@@ -694,15 +759,7 @@ function applyOpportunityPayload(data) {
   state.opportunitySummary = data.summary || { profileSignals: 0, taskPool: 0, demandSignals: 0, matrixCorpus: 0 };
   state.opportunitySource = data.dataSource || '';
   state.opportunityGeneratedAt = data.generatedAt || '';
-  state.topics = (data.recommendations || []).map((task) => ({
-    ...task,
-    id: task.taskId,
-    title: task.topic,
-    need: task.userQuestion,
-    matched: task.matchedProfileTags || [],
-    profileTags: task.matchedProfileTags || [],
-    demandEvidence: task.demandEvidence || [],
-  }));
+  state.topics = (data.recommendations || []).map(apiTaskToTopic);
   if (state.selectedTopic && !state.topics.some((item) => item.taskId === state.selectedTopic.taskId)) state.selectedTopic = null;
   const acceptedTopic = state.topics.find((item) => item.decision === 'accept' && item.status === '待生成');
   if (!state.selectedTopic && acceptedTopic) {
@@ -830,6 +887,7 @@ document.addEventListener('click', async (event) => {
   if (pageTarget) {
     navigate(pageTarget.dataset.page);
     if (pageTarget.dataset.page === 'topics') await loadOpportunities();
+    if (pageTarget.dataset.page === 'studio') await resumeAdvisorWorkspace();
     return;
   }
   const target = event.target.closest('[data-action]');
@@ -1088,14 +1146,62 @@ document.addEventListener('click', async (event) => {
     } catch (error) {
       showToast(`任务拒绝失败：${error.message}`, 'warning');
     }
+  } else if (action === 'open-accepted-task') {
+    const task = state.acceptedTasks.find((item) => item.taskId === target.dataset.taskId);
+    if (!task) return;
+    state.studioSelectedTaskId = task.taskId;
+    state.selectedTopic = task;
+    state.currentTaskId = task.taskId;
+    state.content = null;
+    state.materialComparison = null;
+    state.materialsConfirmed = false;
+    state.editingJob = null;
+    if (!task.contentId) {
+      render();
+      return;
+    }
+    state.busy = 'content-read';
+    render();
+    try {
+      const payload = await oneKosApi.getContentPackage(task.contentId);
+      state.runtime = payload.runtime;
+      applyContentPackage(payload.data);
+      state.apiError = '';
+      showToast('已读取该任务上一次保存的内容和素材进度');
+    } catch (error) {
+      state.apiError = error.message;
+      showToast(`上次内容读取失败：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+      render();
+      updateRuntimeBadge();
+    }
+  } else if (action === 'back-accepted-tasks') {
+    state.studioSelectedTaskId = '';
+    state.content = null;
+    state.materialComparison = null;
+    state.materialsConfirmed = false;
+    state.editingJob = null;
+    render();
   } else if (action === 'generate-content') {
-    const contentId = 'CONTENT-WEB-DEMO-001';
+    const contentId = contentIdForTask(state.currentTaskId);
     state.busy = 'content';
     state.apiError = '';
     navigate('studio');
-    showToast('正在读取画像、任务与品牌知识并生成内容…');
+    showToast('正在读取该任务已有的内容包…');
     try {
-      const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId, contentId });
+      try {
+        const existing = await oneKosApi.getContentPackage(contentId);
+        state.runtime = existing.runtime;
+        applyContentPackage(existing.data);
+        state.apiError = '';
+        showToast('已从飞书读取内容包，可以继续上传素材');
+        return;
+      } catch (readError) {
+        if (readError.status !== 404) throw readError;
+      }
+      showToast('当前任务尚无内容成果，正在调用创作 Agent 生成…');
+      const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId });
       state.runtime = payload.runtime;
       applyContentPackage(payload.data);
       state.apiError = '';
@@ -1233,13 +1339,17 @@ document.addEventListener('change', async (event) => {
   showToast(`正在上传 ${file.name}；上传后会在后台检查…`);
   try {
     const metadata = await readMediaMetadata(file);
+    const requestSequence = ++materialRequestSequence;
     const payload = await oneKosApi.uploadAsset(state.content.contentId, slotId, {
       file,
       advisorId: state.currentAdvisorId,
       ...metadata,
     });
     state.runtime = payload.runtime;
-    applyMaterialResult(payload.data);
+    if (requestSequence >= materialAppliedSequence && state.content?.contentId === payload.data.contentId) {
+      materialAppliedSequence = requestSequence;
+      applyMaterialResult(payload.data);
+    }
     state.materialOperations[slotId] = 'checking';
     render();
     showToast(`${file.name} 已保存到飞书，后台检查已开始`, 'success');
@@ -1257,8 +1367,12 @@ document.addEventListener('change', async (event) => {
   }
 });
 
-render();
-refreshBackendState();
-loadAdvisors();
-resumeQuizSession();
-restoreFeishuIdentity();
+async function bootstrap() {
+  render();
+  await Promise.all([loadAdvisors(), resumeQuizSession()]);
+  await restoreFeishuIdentity();
+  await resumeAdvisorWorkspace();
+  await refreshBackendState();
+}
+
+bootstrap();

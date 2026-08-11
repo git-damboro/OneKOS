@@ -70,8 +70,9 @@ test('内容创作室按素材槽位上传并在后台异步检查', async () =>
   const css = await readFile(path.join(root, 'public', 'styles-v2.css'), 'utf8');
 
   for (const phrase of ['上传后后台检查', '后台检查中', 'select-material', 'materialFileInput', 'selectedMaterialSlotId', 'readMediaMetadata', 'applyMaterialResult', 'pollMaterialCheck', 'materialOperations']) assert.match(source, new RegExp(phrase));
-  for (const method of ['getContentPackage', 'getContentMaterials', 'uploadAsset', 'startEditingJob', 'getEditingJob']) assert.match(apiClient, new RegExp(method));
+  for (const method of ['getAdvisorWorkspace', 'getContentPackage', 'getContentMaterials', 'uploadAsset', 'startEditingJob', 'getEditingJob']) assert.match(apiClient, new RegExp(method));
   for (const phrase of ['正在生成可拍摄内容包', 'recoverContentPackage', '已从飞书恢复内容包']) assert.match(source, new RegExp(phrase));
+  for (const phrase of ['resumeAdvisorWorkspace', 'contentIdForTask', '已经接收的任务', 'open-accepted-task', 'back-accepted-tasks', '明确生成新内容', 'materialRequestSequence', 'readError.status !== 404']) assert.match(source, new RegExp(phrase));
   assert.match(apiClient, /timeoutMs: 120_000/);
   assert.match(css, /\.material-upload-button/);
   assert.match(css, /\.material-file-picker/);
