@@ -195,6 +195,24 @@ test('顾问工作台 API 恢复已接受任务和已有内容包', async () => 
   assert.deepEqual(calls, ['ADV/017']);
 });
 
+test('顾问画像 API 返回已有画像而不创建新问卷', async () => {
+  const calls = [];
+  const service = {
+    async getAdvisorProfile(advisorId) {
+      calls.push(advisorId);
+      return { advisor: { advisorId, initializationStatus: 'active' }, profileTags: [{ tagId: 'TAG-001' }] };
+    },
+  };
+  await withServer(service, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/advisors/${encodeURIComponent('ADV/017')}/profile`);
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.advisor.initializationStatus, 'active');
+    assert.equal(payload.data.profileTags[0].tagId, 'TAG-001');
+  });
+  assert.deepEqual(calls, ['ADV/017']);
+});
+
 test('不存在的初始化会话保持统一 404 错误结构', async () => {
   const service = {
     async getOnboardingSession() {
@@ -219,6 +237,7 @@ test('问卷初始化 API 支持创建、恢复、逐题提交、完成和确认
   const service = {
     async createQuizSession(body) { calls.push(['create', body]); return { session: { sessionId: 'QUIZ/001' } }; },
     async getQuizSession(id) { calls.push(['get', id]); return { session: { sessionId: id, status: 'quiz_active' } }; },
+    async abandonQuizSession(id) { calls.push(['abandon', id]); return { session: { sessionId: id, status: 'abandoned' } }; },
     async submitQuizAnswer(id, body) { calls.push(['answer', id, body]); return { session: { sessionId: id, currentQuestionId: 'Q-2' } }; },
     async completeQuizSession(id) { calls.push(['complete', id]); return { session: { sessionId: id, status: 'generated', candidates: [] } }; },
     async confirmOnboardingSession(id, body) { calls.push(['confirm', id, body]); return { task: { taskId: 'TASK-QUIZ-001' } }; },
@@ -231,6 +250,7 @@ test('问卷初始化 API 支持创建、恢复、逐题提交、完成和确认
     assert.equal((await fetch(path).then((response) => response.json())).data.session.status, 'quiz_active');
     assert.equal((await jsonPost(`${path}/answers`, { questionId: 'Q-1', value: 'A' }).then((response) => response.json())).data.session.currentQuestionId, 'Q-2');
     assert.equal((await jsonPost(`${path}/complete`, {}).then((response) => response.json())).data.session.status, 'generated');
+    assert.equal((await jsonPost(`${path}/abandon`, {}).then((response) => response.json())).data.session.status, 'abandoned');
     const confirmed = await fetch(`${path}/confirm`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'idempotency-key': 'QUIZ-CONFIRM-001' },
       body: JSON.stringify({ acceptedTags: [{ tagId: 'TERM-001' }] }),
@@ -238,7 +258,7 @@ test('问卷初始化 API 支持创建、恢复、逐题提交、完成和确认
     assert.equal(confirmed.data.task.taskId, 'TASK-QUIZ-001');
   });
 
-  assert.deepEqual(calls.map((item) => item[0]), ['create', 'get', 'answer', 'complete', 'confirm']);
+  assert.deepEqual(calls.map((item) => item[0]), ['create', 'get', 'answer', 'complete', 'abandon', 'confirm']);
   assert.equal(calls.at(-1)[2].idempotencyKey, 'QUIZ-CONFIRM-001');
 });
 

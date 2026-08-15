@@ -17,6 +17,11 @@ function positiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function booleanValue(value, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback;
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
 function hint(value) {
   if (!value) return null;
   if (value.length <= 8) return '已配置';
@@ -29,6 +34,9 @@ export function createRuntimeConfig(env = process.env) {
   const feishuConfigured = Boolean(hasFeishuCredentials && onboardingSessionsTableId);
   const feishuLoginConfigured = Boolean(env.FEISHU_APP_ID && env.FEISHU_APP_SECRET && env.FEISHU_OAUTH_REDIRECT_URI);
   const llmConfigured = Boolean(env.LLM_BASE_URL && env.LLM_API_KEY && env.LLM_MODEL);
+  const mediaApiKey = env.MEDIA_AI_API_KEY || env.LLM_API_KEY || '';
+  const mediaBaseUrl = (env.MEDIA_AI_DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com').replace(/\/$/, '');
+  const mediaAnalysisConfigured = Boolean(mediaApiKey && mediaBaseUrl && (env.MEDIA_AI_COMPATIBLE_BASE_URL || env.LLM_BASE_URL));
   const warnings = [];
 
   if (!feishuConfigured) warnings.push(hasFeishuCredentials ? '飞书问卷会话表未配置，使用仓库内模拟数据' : '飞书未配置，使用仓库内模拟数据');
@@ -54,6 +62,18 @@ export function createRuntimeConfig(env = process.env) {
       apiKey: env.LLM_API_KEY || '',
       model: env.LLM_MODEL || '',
       timeoutMs: positiveInteger(env.LLM_TIMEOUT_MS, 45_000),
+      enableThinking: booleanValue(env.LLM_ENABLE_THINKING, false),
+    },
+    mediaAnalysis: {
+      configured: mediaAnalysisConfigured,
+      apiKey: mediaApiKey,
+      dashscopeBaseUrl: mediaBaseUrl,
+      compatibleBaseUrl: (env.MEDIA_AI_COMPATIBLE_BASE_URL || env.LLM_BASE_URL || '').replace(/\/$/, ''),
+      asrModel: env.ASR_MODEL || 'fun-asr-flash-2026-06-15',
+      visionModel: env.VISION_MODEL || 'qwen3-vl-flash',
+      timeoutMs: positiveInteger(env.MEDIA_AI_TIMEOUT_MS, 90_000),
+      frameIntervalSec: positiveInteger(env.VISION_FRAME_INTERVAL_SEC, 2),
+      maxFrames: positiveInteger(env.VISION_MAX_FRAMES, 8),
     },
     video: {
       ffmpegPath: env.FFMPEG_PATH || 'ffmpeg',
@@ -82,6 +102,11 @@ export function toPublicRuntimeStatus(config) {
     llm: {
       configured: config.llm.configured,
       model: config.llm.model || null,
+    },
+    mediaAnalysis: {
+      configured: config.mediaAnalysis.configured,
+      asrModel: config.mediaAnalysis.asrModel,
+      visionModel: config.mediaAnalysis.visionModel,
     },
     video: {
       editor: 'local-ffmpeg',

@@ -81,6 +81,38 @@ test('upsert 按业务键选择创建或更新', async () => {
   assert.equal(updateQueue.calls[2].options.method, 'PUT');
 });
 
+test('并发 upsert 同一业务键时串行执行且只创建一条记录', async () => {
+  const records = [];
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const method = options.method || 'GET';
+    calls.push({ url: String(url), method });
+    if (String(url).includes('tenant_access_token')) return jsonResponse({ code: 0, tenant_access_token: 'token-1', expire: 7200 });
+    if (method === 'GET') {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return jsonResponse({ code: 0, data: { items: records, has_more: false } });
+    }
+    const fields = JSON.parse(options.body).fields;
+    if (method === 'POST') {
+      const record = { record_id: 'rec-created', fields };
+      records.push(record);
+      return jsonResponse({ code: 0, data: { record } });
+    }
+    records[0] = { ...records[0], fields: { ...records[0].fields, ...fields } };
+    return jsonResponse({ code: 0, data: { record: records[0] } });
+  };
+  const client = new FeishuBitableClient({ ...config, fetchImpl });
+
+  const results = await Promise.all([
+    client.upsertByField('tbl-task', '任务ID', 'TASK-1', { 状态: '待生成' }),
+    client.upsertByField('tbl-task', '任务ID', 'TASK-1', { 状态: '待生成' }),
+  ]);
+
+  assert.deepEqual(results.map((item) => item.action), ['created', 'updated']);
+  assert.equal(records.length, 1);
+  assert.equal(calls.filter((call) => call.method === 'POST' && call.url.includes('/records')).length, 1);
+});
+
 test('OpenAPI 非零 code 转换为可诊断错误', async () => {
   const queue = createQueuedFetch([
     jsonResponse({ code: 0, tenant_access_token: 'token-1', expire: 7200 }),
@@ -107,6 +139,29 @@ test('素材上传使用 bitable_file 上传点并返回飞书文件 Token', asy
   assert.equal(queue.calls[1].options.body.get('parent_type'), 'bitable_file');
   assert.equal(queue.calls[1].options.body.get('parent_node'), 'base-token');
   assert.equal(queue.calls[1].options.body.get('size'), '3');
+});
+
+test('超过 20MB 的素材自动使用飞书分片上传', async () => {
+  const blockSize = 4 * 1024 * 1024;
+  const bytes = new Uint8Array(20 * 1024 * 1024 + 1);
+  const queue = createQueuedFetch([
+    jsonResponse({ code: 0, tenant_access_token: 'token-1', expire: 7200 }),
+    jsonResponse({ code: 0, data: { upload_id: 'upload-001', block_size: blockSize, block_num: 6 } }),
+    ...Array.from({ length: 6 }, () => jsonResponse({ code: 0, data: null })),
+    jsonResponse({ code: 0, data: { file_token: 'box-large-001' } }),
+  ]);
+  const client = new FeishuBitableClient({ ...config, fetchImpl: queue.fetchImpl });
+
+  const result = await client.uploadMedia({ fileName: 'large.mp4', mimeType: 'video/mp4', bytes });
+
+  assert.equal(result.fileToken, 'box-large-001');
+  assert.match(queue.calls[1].url, /medias\/upload_prepare$/);
+  const partCalls = queue.calls.filter((call) => /medias\/upload_part$/.test(call.url));
+  assert.equal(partCalls.length, 6);
+  assert.deepEqual(partCalls.map((call) => call.options.body.get('seq')), ['0', '1', '2', '3', '4', '5']);
+  assert.equal(partCalls.at(-1).options.body.get('size'), '1');
+  assert.match(queue.calls.at(-1).url, /medias\/upload_finish$/);
+  assert.deepEqual(JSON.parse(queue.calls.at(-1).options.body), { upload_id: 'upload-001', block_num: 6 });
 });
 
 test('素材下载使用 file_token 获取二进制内容', async () => {

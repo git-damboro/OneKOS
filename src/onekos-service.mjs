@@ -85,20 +85,49 @@ function localCandidate(context) {
       '等待五天数据完整后，再按真实记录给出条件化补能建议；当前不承诺固定次数。',
       '邀请用户留下城市和通勤距离，由顾问人工挑选相似场景继续实测。',
     ].join('\n'),
-    estimatedDurationSec: 60,
+    estimatedDurationSec: 35,
     aspectRatio: '9:16',
     shots: [
-      { durationSec: 8, scriptText: '没有家充、每天通勤 42 公里，一周到底补能几次？先别急着听固定答案。', visualDescription: '顾问站在车旁正对镜头提出问题', shootingGuide: '手机竖着拍到腰部以上，顾问看镜头完整说完开场，结束后停两秒。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 8, orientation: 'portrait', description: '顾问车旁开场口播' }] },
-      { durationSec: 10, scriptText: '我会记录出发时间、起始电量和当天路况。', visualDescription: '导航路线与仪表盘特写', shootingGuide: '先拍导航全程路线，再靠近仪表盘拍清电量；不要拍到家庭住址。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 10, orientation: 'portrait', description: '导航和起始电量记录' }] },
-      { durationSec: 18, scriptText: '到站后只记录真实排队和补能时间，不提前编数字。', visualDescription: '到站排队与计时过程', shootingGuide: '从车辆进入站点开始计时，拍一段排队环境，再拍开始补能的时间画面。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 12, orientation: 'portrait', description: '到站等待与计时过程' }] },
-      { durationSec: 16, scriptText: '等记录完整后，再按照真实条件给出结论。', visualDescription: '顾问展示记录表并解释结论条件', shootingGuide: '把记录表放在镜头旁，顾问只说明结论需要哪些条件，不读出尚未获得的数据。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 12, orientation: 'portrait', description: '顾问解释记录与结论条件' }] },
-      { durationSec: 8, scriptText: '留下你的城市、通勤距离和是否有家充，我继续实测。', visualDescription: '顾问正对镜头收尾', shootingGuide: '保持与开场相同机位，完整说完收尾，不要承诺价格、权益或试驾结果。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 8, orientation: 'portrait', description: '顾问收尾口播' }] },
+      { durationSec: 10, scriptText: '没有家充、每天通勤 42 公里，一周到底补能几次？先别急着听固定答案。', visualDescription: '顾问站在车旁正对镜头提出问题，同时带到车辆和周边真实环境', shootingGuide: '手机竖拍到腰部以上。先让车辆出现在身后，再看镜头说完口播；说完停 2 秒。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 8, orientation: 'portrait', description: '顾问车旁开场与环境连续视频' }] },
+      { durationSec: 14, scriptText: '我会记录出发时间、起始电量、当天路况和补能等待，所有结论都以现场画面为准。', visualDescription: '一段连续素材中依次展示导航路线、仪表电量和到站等待', shootingGuide: '手机竖拍。先拍导航路线 3 秒，再拍仪表电量 3 秒，最后拍到站环境；不要拍到家庭住址。可以边拍边说口播。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 10, orientation: 'portrait', description: '路线、电量和到站环境连续记录' }] },
+      { durationSec: 10, scriptText: '留下你的城市、通勤距离和是否有家充，我按真实记录继续回答。', visualDescription: '顾问展示记录画面后正对镜头收尾', shootingGuide: '手机竖拍。先带到记录画面，再转向顾问正脸并完整说完口播；不要承诺价格或权益。', requiredAssets: [{ type: 'video', required: true, minDurationSec: 8, orientation: 'portrait', description: '记录展示与顾问收尾连续视频' }] },
     ],
     replyPlan: ['通勤距离问题：人工追问单程或往返', '补能方式问题：另建对比任务', '试驾意愿：标记线索后由顾问人工接管'],
     cta: '留下你的城市、通勤距离和是否有家充，我把相似问题排进下一轮实测。',
     factRefs: [],
     profileRefs: task.profileEvidence,
     selectedReason: `路由匹配分 ${task.routeScore}，匹配${advisor.city}地域经验、结论式表达与实车证据偏好，并补位“${task.matrixGap}”。`,
+  };
+}
+
+function homeEditingTestCandidate() {
+  return {
+    title: '居家素材识别与自动剪辑测试',
+    hook: '不用车辆，只用家里的水杯完成一次真实素材解析和剪辑测试。',
+    script: '今天用家里的水杯测试素材识别和自动字幕。现在我把水杯拿起来，再放回桌面，看看系统能不能找到动作和口播对应的时间点。',
+    estimatedDurationSec: 18,
+    aspectRatio: '9:16',
+    shots: [
+      {
+        durationSec: 8,
+        scriptText: '今天用家里的水杯测试素材识别和自动字幕。',
+        visualDescription: '顾问在家中桌旁正对镜头，桌上能看到一个水杯',
+        shootingGuide: '手机竖拍，放稳后让上半身和桌上水杯同时入镜。看镜头说完口播，再停 2 秒。',
+        requiredAssets: [{ type: 'video', required: true, minDurationSec: 6, orientation: 'portrait', description: '居家桌旁开场口播视频' }],
+      },
+      {
+        durationSec: 10,
+        scriptText: '现在我把水杯拿起来，再放回桌面，看看系统能不能找到动作和口播对应的时间点。',
+        visualDescription: '顾问拿起水杯展示，再把水杯放回桌面',
+        shootingGuide: '手机继续竖拍。边说口播边慢慢拿起水杯，停 1 秒后放回桌面；说完后再停 2 秒。',
+        requiredAssets: [{ type: 'video', required: true, minDurationSec: 8, orientation: 'portrait', description: '拿起并放回水杯的动作口播视频' }],
+      },
+    ],
+    editInstructions: [{ shotOrder: 1, instruction: '保留顾问原声，按识别到的口播时间生成字幕。', sourceShotOrders: [1, 2] }],
+    replyPlan: ['该内容仅用于居家剪辑链路测试，不用于发布。'],
+    cta: '测试完成后查看画面截取、真实字幕、声音和进度条是否正常。',
+    factRefs: [], profileRefs: [],
+    selectedReason: '这是独立的居家剪辑测试内容，使用两段最简单的竖屏视频验证与真实汽车内容相同的上传、解析、字幕和剪辑链路。',
   };
 }
 
@@ -118,6 +147,10 @@ function modelPrompt(context, contentId) {
       '脚本要教顾问记录什么，而不是提前替顾问填写记录结果',
       '不得承诺价格、权益、试驾结果，不得自动联系用户',
       '直接生成完整拍摄执行方案，不要先输出粗脚本，不要解释过程，不要使用 Markdown 代码块',
+      '以完成内容任务所需的最小拍摄次数为目标：优先只设计 1—3 段必填视频；确有必要时允许 4—5 段，但必须在 selectedReason 中解释为什么不能合并，禁止超过 5 段必填视频',
+      '能在同一机位或一次连续拍摄中完成的画面与口播必须合并，图片、空镜和补充音频默认设为可选，不得为了丰富形式增加顾问负担',
+      '每个需要顾问说话的镜头必须同时给出 visualDescription、shootingGuide 和逐字 scriptText，让顾问在同一个位置即可知道拍什么、怎么拍、说什么',
+      '默认保留顾问视频中的真实声音；禁止要求 AI 配音或额外录制与视频重复的音频',
       '每个镜头都必须包含面向外行顾问的简短 shootingGuide；不得只写“拍摄车辆”或“补充素材”',
       '每个需要顾问补充的素材必须放在对应镜头 requiredAssets 中，并明确类型、必填性、最低时长、方向、描述和上传提示',
       'requiredAssets 和 shootingGuide 只能描述顾问需要拍摄或上传的原始素材；剪辑、拼接、快切、转场、字幕、配乐、调色、导出等后期动作必须放入 editInstructions，不能创建上传槽位',
@@ -127,7 +160,7 @@ function modelPrompt(context, contentId) {
       title: '字符串',
       hook: '字符串',
       script: '完整口播稿字符串',
-      estimatedDurationSec: 60,
+      estimatedDurationSec: 35,
       aspectRatio: '9:16',
       shots: [{
         durationSec: 8,
@@ -185,10 +218,12 @@ function onboardingModelPrompt(input) {
 }
 
 export class OneKosService {
-  constructor({ repository, llmClient = null, videoEditor = null, mode = 'simulation', clock = () => new Date(), idFactory = () => `ONB-${crypto.randomUUID()}` }) {
+  constructor({ repository, llmClient = null, mediaAnalysisClient = null, mediaAnalysisConfig = {}, videoEditor = null, mode = 'simulation', clock = () => new Date(), idFactory = () => `ONB-${crypto.randomUUID()}` }) {
     this.repository = repository;
     this.llmClient = llmClient;
     this.videoEditor = videoEditor;
+    this.mediaAnalysisClient = mediaAnalysisClient;
+    this.mediaAnalysisConfig = mediaAnalysisConfig;
     this.mode = mode;
     this.clock = clock;
     this.idFactory = idFactory;
@@ -200,6 +235,12 @@ export class OneKosService {
 
   async listAdvisors() {
     return this.repository.listAdvisors();
+  }
+
+  async getAdvisorProfile(advisorId) {
+    const advisor = requireRecord(await this.repository.getAdvisor(advisorId), '顾问', advisorId);
+    const profileTags = await this.repository.getProfileTags(advisorId);
+    return { advisor, profileTags };
   }
 
   async createAdvisorIdentity(raw = {}) {
@@ -298,6 +339,24 @@ export class OneKosService {
       throw error;
     }
     return { session, ...quizView(session) };
+  }
+
+  async abandonQuizSession(sessionId) {
+    const { session } = await this.getQuizSession(sessionId);
+    if (session.status === 'confirmed') {
+      const error = new Error('已生效画像不能作为未完成画像删除');
+      error.statusCode = 409;
+      throw error;
+    }
+    if (session.status === 'abandoned') return { session, idempotent: true };
+    const updated = { ...session, status: 'abandoned', updatedAt: this.timestamp(), lastError: null };
+    const sessionWrite = await this.repository.saveOnboardingSession(updated);
+    const advisor = await this.repository.getAdvisor(session.advisorId);
+    let advisorWrite = null;
+    if (advisor?.initializationStatus === 'collecting') {
+      advisorWrite = await this.repository.saveAdvisor({ ...advisor, initializationStatus: 'uninitialized', workflowStatus: '待校准' });
+    }
+    return { session: updated, advisor: advisor ? { ...advisor, ...(advisorWrite ? { initializationStatus: 'uninitialized', workflowStatus: '待校准' } : {}) } : null, sessionWrite, advisorWrite, idempotent: false };
   }
 
   async submitQuizAnswer(sessionId, answer) {
@@ -570,26 +629,30 @@ export class OneKosService {
     const acceptedTask = latestTask(acceptedTasks);
     const taskWithContent = latestTask(tasks.filter((task) => contents.some((content) => content.taskId === task.taskId)));
     const task = acceptedTask || taskWithContent;
-    const content = contentForTask(task, contents);
-    let contentPackage = null;
-    let recoveryWarning = '';
-    if (content) {
+    const loadContentState = async (targetTask) => {
+      const savedContent = contentForTask(targetTask, contents);
+      if (!savedContent) return { savedContent: null, contentPackage: null };
       try {
-        contentPackage = await this.getContentPackage(content.contentId);
+        return { savedContent, contentPackage: await this.getContentPackage(savedContent.contentId) };
       } catch (error) {
         if (error?.statusCode !== 404) throw error;
-        recoveryWarning = `已有内容 ${content.contentId} 缺少完整拍摄要求，可从已接受任务重新生成`;
+        return { savedContent, contentPackage: null };
       }
-    }
+    };
+    const sortedAcceptedTasks = [...acceptedTasks].sort((left, right) => {
+      const leftTime = Date.parse(left.decidedAt || left.routedAt || left.taskDate || '') || 0;
+      const rightTime = Date.parse(right.decidedAt || right.routedAt || right.taskDate || '') || 0;
+      return rightTime - leftTime;
+    });
+    const acceptedContentStates = await Promise.all(sortedAcceptedTasks.map(loadContentState));
+    const selectedAcceptedIndex = sortedAcceptedTasks.findIndex((item) => item.taskId === task?.taskId);
+    const selectedState = selectedAcceptedIndex >= 0 ? acceptedContentStates[selectedAcceptedIndex] : await loadContentState(task);
+    const contentPackage = selectedState.contentPackage;
     return {
       advisor,
       task,
-      acceptedTasks: [...acceptedTasks].sort((left, right) => {
-        const leftTime = Date.parse(left.decidedAt || left.routedAt || left.taskDate || '') || 0;
-        const rightTime = Date.parse(right.decidedAt || right.routedAt || right.taskDate || '') || 0;
-        return rightTime - leftTime;
-      }).map((accepted) => {
-        const savedContent = contentForTask(accepted, contents);
+      acceptedTasks: sortedAcceptedTasks.map((accepted, index) => {
+        const savedContent = acceptedContentStates[index].contentPackage?.content || null;
         return {
           ...accepted,
           contentId: savedContent?.contentId || '',
@@ -599,11 +662,11 @@ export class OneKosService {
       }),
       contentPackage,
       stage: contentPackage ? contentPackage.status : task ? 'accepted_waiting_generation' : 'waiting_opportunity',
-      recoveryWarning,
+      recoveryWarning: '',
     };
   }
 
-  async generateContent({ advisorId = 'ADV-017', taskId = 'TASK-001', contentId: requestedContentId } = {}) {
+  async generateContent({ advisorId = 'ADV-017', taskId = 'TASK-001', contentId: requestedContentId, testMode = '' } = {}) {
     const context = await this.getAdvisorContext({ advisorId, taskId });
     if (context.task.status !== '待生成') {
       const error = new Error(`任务 ${taskId} 尚未被顾问接受，不能生成内容`);
@@ -619,13 +682,23 @@ export class OneKosService {
     }
     let candidate;
     let generator = 'local-deterministic';
-    if (this.llmClient) {
-      candidate = await this.llmClient.generateJson({
-        system: '你是 OneKOS 内容生成器。严格依据上下文生成个性化短视频方案，只返回 JSON。',
-        user: modelPrompt(context, contentId),
-        temperature: 0.25,
-      });
-      generator = 'external-llm';
+    let generationWarning = '';
+    if (testMode === 'home-editing') {
+      candidate = homeEditingTestCandidate();
+      generator = 'home-editing-test';
+    } else if (this.llmClient) {
+      try {
+        candidate = await this.llmClient.generateJson({
+          system: '你是 OneKOS 内容生成器。严格依据上下文生成个性化短视频方案，只返回 JSON。',
+          user: modelPrompt(context, contentId),
+          temperature: 0.25,
+        });
+        generator = 'external-llm';
+      } catch (error) {
+        candidate = localCandidate(context);
+        generator = 'local-deterministic-fallback';
+        generationWarning = `外部模型不可用，已明确使用本地确定性生成器：${error.message}`;
+      }
     } else {
       candidate = localCandidate(context);
     }
@@ -660,12 +733,13 @@ export class OneKosService {
     const assetPlaceholderWrites = await this.repository.saveAdvisorAssets(advisorAssets);
     return {
       mode: this.mode, generator, content, quality, write, shootingRequirements, requirementWrites, retiredRequirementWrites,
-      advisorAssets, assetPlaceholderWrites, contextWarnings: context.warnings,
+      advisorAssets, assetPlaceholderWrites,
+      contextWarnings: [...context.warnings, ...(generationWarning ? [generationWarning] : [])],
     };
   }
 
   async getContentMaterials(contentId) {
-    const [allShootingRequirements, allAdvisorAssets, editingJob] = await Promise.all([
+    const [allShootingRequirements, allAdvisorAssets, savedEditingJob] = await Promise.all([
       this.repository.listShootingRequirements(contentId),
       this.repository.listAdvisorAssets(contentId),
       this.repository.getEditingJob ? this.repository.getEditingJob(`${contentId}-RENDER-001`) : null,
@@ -675,6 +749,19 @@ export class OneKosService {
     const advisorAssets = allAdvisorAssets.filter((item) => activeSlots.has(item.slotId));
     if (!shootingRequirements.length) requireRecord(null, '内容拍摄要求', contentId);
     const comparison = compareRequirementsAndAssets(shootingRequirements, advisorAssets);
+    let editingJob = savedEditingJob;
+    if (comparison.complete && !editingJob) {
+      const content = requireRecord(await this.repository.getContentResult(contentId), '内容成果', contentId);
+      editingJob = buildEditingJob({
+        content: editingContentFromRequirements(content, shootingRequirements),
+        assets: advisorAssets,
+        comparison,
+        timestamp: this.timestamp(),
+      });
+      editingJob.editor = '本地 FFmpeg';
+      editingJob.simulation = advisorAssets.some((asset) => asset.simulation);
+      await this.repository.saveEditingJob(editingJob);
+    }
     return {
       contentId,
       shootingRequirements,
@@ -787,7 +874,35 @@ export class OneKosService {
       width: Number(serverMetadata?.width) || Number(width) || uploadedAsset.width || 0,
       height: Number(serverMetadata?.height) || Number(height) || uploadedAsset.height || 0,
     };
-    const checkedAsset = { ...inspectUploadedAsset(requirement, rawAsset), simulation: Boolean(uploadedAsset.simulation) };
+    let checkedAsset = { ...inspectUploadedAsset(requirement, rawAsset), simulation: Boolean(uploadedAsset.simulation) };
+    if (checkedAsset.status === 'available' && requirement.type === 'video' && this.mediaAnalysisClient && this.videoEditor?.prepareAnalysis) {
+      try {
+        const prepared = await this.videoEditor.prepareAnalysis({
+          bytes,
+          fileName,
+          mimeType,
+          frameIntervalSec: this.mediaAnalysisConfig.frameIntervalSec,
+          maxFrames: this.mediaAnalysisConfig.maxFrames,
+        });
+        checkedAsset = {
+          ...checkedAsset,
+          analysisStatus: '已完成',
+          analysis: await this.mediaAnalysisClient.analyze({ prepared, requirement }),
+        };
+      } catch (error) {
+        checkedAsset = {
+          ...checkedAsset,
+          analysisStatus: '解析降级',
+          analysis: {
+            status: '解析降级',
+            error: error.message,
+            recommendedClip: { startSec: 0, endSec: checkedAsset.durationSec },
+            asr: { transcript: '', sentences: [] },
+            vision: { summary: '', segments: [], warnings: [] },
+          },
+        };
+      }
+    }
     const assetWrite = await this.repository.saveAdvisorAssets([checkedAsset]);
     const persistedAssets = await this.repository.listAdvisorAssets(contentId);
     const assets = (persistedAssets.length ? persistedAssets : existingAssets)

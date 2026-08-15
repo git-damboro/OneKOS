@@ -19,6 +19,7 @@ test('调用 OpenAI-compatible chat completions 并返回结构化结果', async
     baseUrl: 'https://llm.test/v1/',
     apiKey: 'secret',
     model: 'demo-model',
+    enableThinking: false,
     fetchImpl: async (url, options) => {
       calls.push({ url: String(url), options });
       return response({ choices: [{ message: { content: '```json\n{"hook":"你好"}\n```' } }] });
@@ -30,6 +31,7 @@ test('调用 OpenAI-compatible chat completions 并返回结构化结果', async
   assert.equal(calls[0].url, 'https://llm.test/v1/chat/completions');
   assert.equal(calls[0].options.headers.Authorization, 'Bearer secret');
   assert.equal(JSON.parse(calls[0].options.body).model, 'demo-model');
+  assert.equal(JSON.parse(calls[0].options.body).enable_thinking, false);
 });
 
 test('模型 HTTP 错误与无效响应转换为可诊断错误', async () => {
@@ -55,4 +57,19 @@ test('网络或超时异常不会泄露 API Key', async () => {
     () => client.generateJson({ user: 'x' }),
     (error) => error instanceof LlmApiError && !error.message.includes('super-secret') && error.message.includes('network down'),
   );
+});
+
+test('模型请求超时不会连续重试并返回可操作提示', async () => {
+  let attempts = 0;
+  const client = new OpenAICompatibleClient({
+    baseUrl: 'https://llm.test/v1', apiKey: 'secret', model: 'm', timeoutMs: 120_000,
+    fetchImpl: async () => {
+      attempts += 1;
+      const error = new Error('The operation was aborted due to timeout');
+      error.name = 'TimeoutError';
+      throw error;
+    },
+  });
+  await assert.rejects(() => client.generateJson({ user: 'x' }), /模型请求超时（120 秒）/);
+  assert.equal(attempts, 1);
 });

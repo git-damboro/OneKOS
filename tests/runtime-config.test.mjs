@@ -17,10 +17,11 @@ const llmEnv = {
 };
 
 test('完整飞书与模型配置判定为 live', () => {
-  const config = createRuntimeConfig({ ...feishuEnv, ...llmEnv });
+  const config = createRuntimeConfig({ ...feishuEnv, ...llmEnv, LLM_ENABLE_THINKING: 'false' });
   assert.equal(config.mode, 'live');
   assert.equal(config.feishu.configured, true);
   assert.equal(config.llm.configured, true);
+  assert.equal(config.llm.enableThinking, false);
 });
 
 test('仅配置飞书时判定为 hybrid', () => {

@@ -288,6 +288,7 @@ function mapAdvisorAsset(record) {
     durationSec: Number(f.视频时长秒) || 0, width: size.width, height: size.height, orientation: assetOrientation(f.画面方向),
     resolution: f.分辨率 || '', technicalCheckStatus: checkStatus,
     advisorConfirmationStatus: f.顾问确认状态 || '待确认', requiresReshoot: yes(f.是否需要重拍), invalidReason: f.不合格原因 || '',
+    analysisStatus: f.AI解析状态 || '', analysis: parseJson(f.AI解析JSON, null),
     status: attachment
       ? checkStatus === '检查通过' ? 'available' : ['待检查', '检查中'].includes(checkStatus) ? 'checking' : 'invalid'
       : 'waiting_upload',
@@ -560,6 +561,8 @@ export class FeishuOneKosRepository {
         顾问确认状态: asset.advisorConfirmationStatus,
         是否需要重拍: asset.requiresReshoot ? '是' : '否',
         不合格原因: asset.invalidReason,
+        AI解析状态: asset.analysisStatus || '',
+        AI解析JSON: asset.analysis ? JSON.stringify(asset.analysis) : '',
         模拟数据: asset.simulation ? '是' : '否',
       };
       if (asset.fileToken) {

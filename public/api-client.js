@@ -41,10 +41,12 @@ export const oneKosApi = {
   health: () => request('/api/health', { timeoutMs: 10_000 }),
   currentUser: () => request('/api/auth/me', { timeoutMs: 10_000 }),
   listAdvisors: () => request('/api/advisors'),
+  getAdvisorProfile: (advisorId) => request(`/api/advisors/${encodeURIComponent(advisorId)}/profile`),
   getAdvisorWorkspace: (advisorId) => request(`/api/advisors/${encodeURIComponent(advisorId)}/workspace`, { timeoutMs: 60_000 }),
   createAdvisor: (input) => request('/api/advisors', { method: 'POST', body: input }),
   createQuizSession: (input) => request('/api/onboarding/quiz-sessions', { method: 'POST', body: input }),
   getQuizSession: (sessionId) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}`),
+  abandonQuizSession: (sessionId) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}/abandon`, { method: 'POST', body: {} }),
   submitQuizAnswer: (sessionId, answer) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}/answers`, { method: 'POST', body: answer }),
   completeQuizSession: (sessionId) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}/complete`, { method: 'POST', body: {} }),
   confirmQuizSession: (sessionId, acceptedTags, idempotencyKey) => request(`/api/onboarding/quiz-sessions/${encodeURIComponent(sessionId)}/confirm`, {
@@ -64,7 +66,7 @@ export const oneKosApi = {
   decideOpportunity: (taskId, advisorId, decision, reason = '') => request(`/api/opportunities/${encodeURIComponent(taskId)}/decision`, {
     method: 'POST', body: { advisorId, decision, reason },
   }),
-  generateContent: (input) => request('/api/content/generate', { method: 'POST', body: input, timeoutMs: 120_000 }),
+  generateContent: (input) => request('/api/content/generate', { method: 'POST', body: input, timeoutMs: 90_000 }),
   getContentPackage: (contentId) => request(`/api/content/${encodeURIComponent(contentId)}`),
   getContentMaterials: (contentId) => request(`/api/content/${encodeURIComponent(contentId)}/materials`),
   uploadAsset: (contentId, slotId, { file, advisorId, durationSec = 0, width = 0, height = 0 }) => {
@@ -75,7 +77,7 @@ export const oneKosApi = {
     form.set('width', String(width));
     form.set('height', String(height));
     return request(`/api/content/${encodeURIComponent(contentId)}/assets/${encodeURIComponent(slotId)}`, {
-      method: 'POST', body: form, timeoutMs: 120_000,
+      method: 'POST', body: form, timeoutMs: 300_000,
     });
   },
   startEditingJob: (editingJobId) => request(`/api/editing/jobs/${encodeURIComponent(editingJobId)}/start`, {

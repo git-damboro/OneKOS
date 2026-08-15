@@ -120,6 +120,28 @@ test('读取 ADV-017 画像、TASK-001 与有效品牌知识', async () => {
   assert.equal(context.simulation, true);
 });
 
+test('删除未完成画像只标记会话已放弃并重置顾问状态', async () => {
+  const { service, repository } = createService();
+  await service.createQuizSession(onboardingInput);
+
+  const result = await service.abandonQuizSession('ONB-TEST-001');
+  const snapshot = repository.snapshot();
+
+  assert.equal(result.session.status, 'abandoned');
+  assert.equal(result.advisor.initializationStatus, 'uninitialized');
+  assert.equal(snapshot.onboardingSessions.find((item) => item.sessionId === 'ONB-TEST-001').status, 'abandoned');
+  assert.equal(snapshot.advisors.find((item) => item.advisorId === 'ADV-NEW-001').workflowStatus, '待校准');
+});
+
+test('已有画像顾问可直接读取顾问资料与画像标签', async () => {
+  const { service } = createService();
+  const result = await service.getAdvisorProfile('ADV-017');
+
+  assert.equal(result.advisor.advisorId, 'ADV-017');
+  assert.equal(result.profileTags.length, 4);
+  assert.ok(result.profileTags.every((tag) => tag.advisorId === 'ADV-017'));
+});
+
 test('生成内容并按内容 ID 幂等写回', async () => {
   const { service, repository } = createService();
   const first = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-TEST-001' });
@@ -164,7 +186,9 @@ test('工作台遇到旧内容缺少拍摄要求时仍恢复已接受任务', as
   assert.equal(restored.task.taskId, 'TASK-001');
   assert.equal(restored.stage, 'accepted_waiting_generation');
   assert.equal(restored.contentPackage, null);
-  assert.match(restored.recoveryWarning, /缺少完整拍摄要求/);
+  assert.equal(restored.acceptedTasks[0].hasContent, false);
+  assert.equal(restored.acceptedTasks[0].contentId, '');
+  assert.equal(restored.recoveryWarning, '');
 });
 
 test('工作台同一任务存在多个内容时优先恢复任务派生的标准内容 ID', async () => {
@@ -210,6 +234,18 @@ test('配置模型时使用模型候选结果，但仍由服务端质检和落�
   assert.equal(result.quality.passed, true);
   assert.equal(result.content.schemaVersion, '2.0');
   assert.equal(result.content.shots.length, 3);
+});
+
+test('外部内容模型超时时明确降级并继续生成和写回', async () => {
+  const llmClient = { async generateJson() { throw new Error('模型请求超时（25 秒）'); } };
+  const { service, repository } = createService({ mode: 'live', llmClient });
+
+  const result = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-FALLBACK-001' });
+
+  assert.equal(result.generator, 'local-deterministic-fallback');
+  assert.match(result.contextWarnings.at(-1), /外部模型不可用/);
+  assert.equal(result.content.status, '待顾问补真实素材');
+  assert.equal(repository.snapshot().contentResults.some((item) => item.contentId === 'CONTENT-FALLBACK-001'), true);
 });
 
 test('生产演示用代码比较 JSON2/JSON3，齐全后创建剪辑任务', async () => {
@@ -319,6 +355,27 @@ test('素材齐全后创建剪辑任务并把预览成片写回', async () => {
   assert.equal(completed.progress, 100);
   assert.match(completed.previewFileToken, /^sim-render-/);
   assert.equal((await repository.getEditingJob(completed.editingJobId)).status, '待顾问预览');
+});
+
+test('素材已经齐全但剪辑任务缺失时读取状态会自动补建任务', async () => {
+  const { service, repository } = createService();
+  const generated = await service.generateContent({ advisorId: 'ADV-017', taskId: 'TASK-001', contentId: 'CONTENT-RECOVER-EDITING' });
+  for (const requirement of generated.shootingRequirements) {
+    await repository.saveAdvisorAssets([{
+      assetId: `${requirement.slotId}-ASSET`, contentId: generated.content.contentId, slotId: requirement.slotId,
+      shotId: requirement.shotId, advisorId: 'ADV-017', fileToken: `box-${requirement.slotId}`,
+      fileName: `${requirement.slotId}.mp4`, mimeType: 'video/mp4', fileSize: 1024,
+      type: requirement.type, durationSec: Math.max(10, requirement.minDurationSec), width: 1080, height: 1920,
+      orientation: 'portrait', resolution: '1080x1920', technicalCheckStatus: '检查通过',
+      advisorConfirmationStatus: '待确认', requiresReshoot: false, invalidReason: '', status: 'available', simulation: true,
+    }]);
+  }
+
+  const recovered = await service.getContentMaterials(generated.content.contentId);
+
+  assert.equal(recovered.comparison.complete, true);
+  assert.ok(recovered.editingJob?.editingJobId);
+  assert.equal(recovered.editingJob.status, '待剪辑');
 });
 
 test('同一剪辑任务并发启动时只允许一个请求进入 FFmpeg 准备阶段', async () => {

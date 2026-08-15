@@ -12,6 +12,13 @@ function modelKey(value) {
   return String(value || '').replace(/乐道|\s+/g, '').toLowerCase();
 }
 
+function taskFingerprint(task) {
+  if (String(task.taskId || '').trim()) return `task-id:${String(task.taskId).trim().toLowerCase()}`;
+  return [task.advisorId, task.targetModel, task.userQuestion, task.topic, task.matrixGap, task.taskDate]
+    .map((value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase())
+    .join('|');
+}
+
 function tokens(value) {
   const text = textOf(value).replace(/[，。！？、：；（）()\s]/g, '');
   const result = new Set();
@@ -60,12 +67,15 @@ function matrixOpportunity(task, contentResults) {
 
 export function routeOpportunities({ advisorId, tasks = [], profileTags = [], leads = [], contentResults = [], limit = 3 }) {
   const candidates = tasks.filter((task) => (!task.advisorId || task.advisorId === advisorId) && !TERMINAL_TASK_STATUSES.has(task.status));
-  const recommendations = candidates.map((task) => {
+  const uniqueCandidates = [...new Map(candidates.map((task) => [taskFingerprint(task), task])).values()];
+  const recommendations = uniqueCandidates.map((task) => {
     const profile = profileMatch(task, profileTags);
     const demand = demandMatch(task, leads.filter((lead) => !lead.advisorId || lead.advisorId === advisorId));
     const matrix = matrixOpportunity(task, contentResults);
     const score = clamp(profile.score * 0.45 + demand.score * 0.3 + matrix.score * 0.25);
     const matchedProfileTags = profile.tags.map((tag) => tag.label);
+    const visibleProfileTags = matchedProfileTags.slice(0, 5);
+    const hiddenProfileTagCount = matchedProfileTags.length - visibleProfileTags.length;
     return {
       ...task,
       score,
@@ -75,7 +85,7 @@ export function routeOpportunities({ advisorId, tasks = [], profileTags = [], le
       demandEvidence: demand.leads.map((lead) => lead.originalComment || lead.sourceComment || lead.sourceText).filter(Boolean).slice(0, 3),
       scoreBreakdown: { profile: profile.score, demand: demand.score, matrix: matrix.score },
       matrixSimilarity: matrix.similarity,
-      why: `画像匹配 ${profile.score} 分、需求信号 ${demand.score} 分、矩阵空白 ${matrix.score} 分；${matchedProfileTags.length ? `命中“${matchedProfileTags.join('、')}”` : '当前画像证据较弱'}。`,
+      why: `画像匹配 ${profile.score} 分、需求信号 ${demand.score} 分、矩阵空白 ${matrix.score} 分；${matchedProfileTags.length ? `主要命中“${visibleProfileTags.join('、')}”${hiddenProfileTagCount ? `等 ${matchedProfileTags.length} 项画像` : ''}` : '当前画像证据较弱'}。`,
     };
   }).sort((left, right) => right.score - left.score).slice(0, Math.max(1, Math.min(3, Number(limit) || 3)));
 
@@ -83,7 +93,8 @@ export function routeOpportunities({ advisorId, tasks = [], profileTags = [], le
     recommendations,
     summary: {
       profileSignals: profileTags.filter((tag) => tag.status !== '禁用' && tag.status !== 'disabled').length,
-      taskPool: candidates.length,
+      taskPool: uniqueCandidates.length,
+      duplicateTasks: candidates.length - uniqueCandidates.length,
       demandSignals: leads.filter((lead) => !lead.advisorId || lead.advisorId === advisorId).length,
       matrixCorpus: contentResults.length,
     },

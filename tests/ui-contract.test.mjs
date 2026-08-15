@@ -70,14 +70,23 @@ test('内容创作室按素材槽位上传并在后台异步检查', async () =>
   const css = await readFile(path.join(root, 'public', 'styles-v2.css'), 'utf8');
 
   for (const phrase of ['上传后后台检查', '后台检查中', 'select-material', 'materialFileInput', 'selectedMaterialSlotId', 'readMediaMetadata', 'applyMaterialResult', 'pollMaterialCheck', 'materialOperations']) assert.match(source, new RegExp(phrase));
-  for (const method of ['getAdvisorWorkspace', 'getContentPackage', 'getContentMaterials', 'uploadAsset', 'startEditingJob', 'getEditingJob']) assert.match(apiClient, new RegExp(method));
-  for (const phrase of ['正在生成可拍摄内容包', 'recoverContentPackage', '已从飞书恢复内容包']) assert.match(source, new RegExp(phrase));
-  for (const phrase of ['resumeAdvisorWorkspace', 'contentIdForTask', '已经接收的任务', 'open-accepted-task', 'back-accepted-tasks', '明确生成新内容', 'materialRequestSequence', 'readError.status !== 404']) assert.match(source, new RegExp(phrase));
-  assert.match(apiClient, /timeoutMs: 120_000/);
+  for (const method of ['getAdvisorProfile', 'getAdvisorWorkspace', 'getContentPackage', 'getContentMaterials', 'uploadAsset', 'startEditingJob', 'getEditingJob']) assert.match(apiClient, new RegExp(method));
+  for (const phrase of ['正在生成可拍摄内容包', 'recoverContentPackage', '已从飞书恢复生成结果']) assert.match(source, new RegExp(phrase));
+  for (const phrase of ['resumeAdvisorWorkspace', 'contentIdForTask', '已经接收的任务', 'open-accepted-task', 'back-accepted-tasks', 'generateStudioContent', '当前尚无内容成果，点击后直接生成', 'materialRequestSequence']) assert.match(source, new RegExp(phrase));
+  for (const phrase of ['workspaceLoading', 'workspaceRequestSequence', 'clearAdvisorWorkspace', '正在读取当前顾问的已接收任务']) assert.match(source, new RegExp(phrase));
+  for (const phrase of ['loadExistingAdvisorProfile', 'clearAdvisorQuizState', '已有顾问画像', '不再重复进入基础问卷']) assert.match(source, new RegExp(phrase));
+  assert.match(css, /\.workspace-spinner/);
+  assert.match(css, /@keyframes workspace-spin/);
+  assert.match(apiClient, /generateContent:[\s\S]*timeoutMs: 90_000/);
   assert.match(css, /\.material-upload-button/);
+  assert.match(source, /不能超过 100MB/);
   assert.match(css, /\.material-file-picker/);
   assert.match(css, /\.material-upload-row\.checking/);
   assert.match(source, /生成预览视频/);
+  assert.match(source, /请先补齐素材/);
+  assert.match(source, /material-video-action/);
+  assert.match(source, /<button class="primary" data-page="quality">查看内容质检/);
+  assert.match(css, /\.material-video-action/);
   assert.match(source, /pollEditingJob/);
   assert.match(css, /\.editing-preview/);
 });
@@ -94,7 +103,7 @@ test('画像页提供可恢复的一题一屏问卷和可纠偏词云', async ()
     assert.match(source, new RegExp(phrase));
   }
   for (const action of [
-    'select-advisor', 'create-quiz-session', 'resume-quiz', 'submit-quiz-answer', 'previous-quiz-question',
+    'select-advisor', 'back-advisor-selection', 'create-quiz-session', 'resume-quiz', 'abandon-quiz-session', 'submit-quiz-answer', 'previous-quiz-question',
     'complete-quiz', 'select-cloud-word', 'remove-cloud-word', 'lower-cloud-word', 'lock-cloud-word', 'confirm-word-cloud',
   ]) {
     assert.match(source, new RegExp(action));
@@ -105,6 +114,9 @@ test('画像页提供可恢复的一题一屏问卷和可纠偏词云', async ()
     assert.match(apiClient, new RegExp(method));
   }
   assert.match(source, /localStorage/);
+  for (const phrase of ['resumableSession', 'updateAdvisorBadge', 'quiz-create', 'quiz-confirm', '删除未完成画像']) assert.match(source, new RegExp(phrase));
+  assert.match(apiClient, /abandonQuizSession/);
+  assert.doesNotMatch(source, /Promise\.all\(\[loadAdvisors\(\), resumeQuizSession\(\)\]\)/);
   assert.match(css, /\.quiz-card/);
   assert.match(css, /\.profile-word-cloud/);
   assert.match(css, /\.cloud-word/);
@@ -130,4 +142,7 @@ test('机会雷达从服务端读取真实业务记录并持久化顾问决策',
   assert.doesNotMatch(source, /矩阵空白<\/span><strong>3<\/strong>/);
   assert.match(css, /\.score-breakdown/);
   assert.match(css, /\.topic-actions/);
+  assert.match(source, /renderProfileEvidence/);
+  assert.match(source, /还有 \$\{hidden\.length\} 项/);
+  assert.match(css, /\.chip-overflow/);
 });

@@ -20,6 +20,7 @@ export class FeishuBitableClient {
     this.now = now;
     this.token = null;
     this.tokenExpiresAt = 0;
+    this.upsertQueues = new Map();
   }
 
   async getTenantAccessToken() {
@@ -115,19 +116,49 @@ export class FeishuBitableClient {
   }
 
   async upsertByField(tableId, keyField, keyValue, fields) {
-    const existing = await this.findRecordByField(tableId, keyField, keyValue);
-    if (existing) {
-      const record = await this.updateRecord(tableId, existing.record_id, { ...fields, [keyField]: keyValue });
-      return { action: 'updated', record };
+    const queueKey = `${tableId}\u0000${keyField}\u0000${String(keyValue)}`;
+    const previous = this.upsertQueues.get(queueKey) || Promise.resolve();
+    const operation = previous.catch(() => {}).then(async () => {
+      const existing = await this.findRecordByField(tableId, keyField, keyValue);
+      if (existing) {
+        const record = await this.updateRecord(tableId, existing.record_id, { ...fields, [keyField]: keyValue });
+        return { action: 'updated', record };
+      }
+      const record = await this.createRecord(tableId, { ...fields, [keyField]: keyValue });
+      return { action: 'created', record };
+    });
+    this.upsertQueues.set(queueKey, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.upsertQueues.get(queueKey) === operation) this.upsertQueues.delete(queueKey);
     }
-    const record = await this.createRecord(tableId, { ...fields, [keyField]: keyValue });
-    return { action: 'created', record };
+  }
+
+  fieldsUrl(tableId) {
+    return `${this.apiBaseUrl}/bitable/v1/apps/${encodeURIComponent(this.appToken)}/tables/${encodeURIComponent(tableId)}/fields`;
+  }
+
+  async listFields(tableId) {
+    const body = await this.requestJson(`${this.fieldsUrl(tableId)}?page_size=100`, { method: 'GET' });
+    return body.data?.items || [];
+  }
+
+  async createField(tableId, { name, type = 1, property = null }) {
+    const body = await this.requestJson(this.fieldsUrl(tableId), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ field_name: name, type, ...(property ? { property } : {}) }),
+    });
+    return body.data?.field;
   }
 
   async uploadMedia({ fileName, mimeType, bytes }) {
     const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     if (!data.byteLength) throw new FeishuOpenApiError('不能上传空文件');
-    if (data.byteLength > 20 * 1024 * 1024) throw new FeishuOpenApiError('单个素材不能超过 20MB');
+    if (data.byteLength > 100 * 1024 * 1024) throw new FeishuOpenApiError('单个素材不能超过 100MB');
+
+    if (data.byteLength > 20 * 1024 * 1024) return this.uploadMediaMultipart({ fileName, mimeType, data });
 
     const form = new FormData();
     form.set('file_name', fileName);
@@ -135,9 +166,48 @@ export class FeishuBitableClient {
     form.set('parent_node', this.appToken);
     form.set('size', String(data.byteLength));
     form.set('file', new Blob([data], { type: mimeType || 'application/octet-stream' }), fileName);
-    const body = await this.requestJson(`${this.apiBaseUrl}/drive/v1/medias/upload_all`, { method: 'POST', body: form });
+    const body = await this.requestJson(`${this.apiBaseUrl}/drive/v1/medias/upload_all`, {
+      method: 'POST', body: form, signal: AbortSignal.timeout(Math.max(this.timeoutMs, 60_000)),
+    });
     const fileToken = body.data?.file_token;
     if (!fileToken) throw new FeishuOpenApiError('飞书未返回文件 Token', { details: body });
+    return { fileToken };
+  }
+
+  async uploadMediaMultipart({ fileName, mimeType, data }) {
+    const prepare = await this.requestJson(`${this.apiBaseUrl}/drive/v1/medias/upload_prepare`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ file_name: fileName, parent_type: 'bitable_file', parent_node: this.appToken, size: data.byteLength }),
+      signal: AbortSignal.timeout(Math.max(this.timeoutMs, 60_000)),
+    });
+    const uploadId = prepare.data?.upload_id;
+    const blockSize = Number(prepare.data?.block_size) || 4 * 1024 * 1024;
+    const blockNum = Number(prepare.data?.block_num) || Math.ceil(data.byteLength / blockSize);
+    if (!uploadId || !blockNum) throw new FeishuOpenApiError('飞书未返回有效的分片上传策略', { details: prepare });
+
+    for (let seq = 0; seq < blockNum; seq += 1) {
+      const start = seq * blockSize;
+      const part = data.subarray(start, Math.min(start + blockSize, data.byteLength));
+      const form = new FormData();
+      form.set('upload_id', uploadId);
+      form.set('seq', String(seq));
+      form.set('size', String(part.byteLength));
+      form.set('file', new Blob([part], { type: mimeType || 'application/octet-stream' }), `${fileName}.part-${seq}`);
+      await this.requestJson(`${this.apiBaseUrl}/drive/v1/medias/upload_part`, {
+        method: 'POST', body: form, signal: AbortSignal.timeout(Math.max(this.timeoutMs, 60_000)),
+      });
+      if (seq < blockNum - 1) await new Promise((resolve) => setTimeout(resolve, 220));
+    }
+
+    const finish = await this.requestJson(`${this.apiBaseUrl}/drive/v1/medias/upload_finish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ upload_id: uploadId, block_num: blockNum }),
+      signal: AbortSignal.timeout(Math.max(this.timeoutMs, 60_000)),
+    });
+    const fileToken = finish.data?.file_token;
+    if (!fileToken) throw new FeishuOpenApiError('飞书完成分片上传后未返回文件 Token', { details: finish });
     return { fileToken };
   }
 

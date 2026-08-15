@@ -121,6 +121,14 @@ export function normalizeProductionCandidate(candidate, { task, contentId }) {
       requiredAssets,
     };
   });
+  let requiredVideoCount = 0;
+  for (const shot of shots) {
+    for (const asset of shot.requiredAssets) {
+      if (asset.type !== 'video' || !asset.required) continue;
+      requiredVideoCount += 1;
+      if (requiredVideoCount > 5) asset.required = false;
+    }
+  }
 
   const script = scriptText(candidate) || shots.map((shot) => shot.scriptText).filter(Boolean).join('\n');
   return {
@@ -201,7 +209,7 @@ export function inspectUploadedAsset(requirement, rawAsset) {
 
   if (!rawAsset.fileToken) reasons.push('文件尚未成功保存到飞书');
   if (!fileSize) reasons.push('文件为空或无法读取文件大小');
-  if (fileSize > 20 * 1024 * 1024) reasons.push('单个文件不能超过 20MB');
+  if (fileSize > 100 * 1024 * 1024) reasons.push('单个文件不能超过 100MB');
   if (type !== requirement.type) reasons.push(`需要${requirement.type}，实际为${type}`);
 
   if (['video', 'audio'].includes(type)) {
@@ -299,12 +307,22 @@ export function buildEditingJob({ content, assets, comparison, timestamp }) {
       contentId: content.contentId,
       aspectRatio: content.aspectRatio,
       estimatedDurationSec: content.estimatedDurationSec,
-      shots: content.shots.map((shot) => ({
-        shotId: shot.shotId,
-        durationSec: shot.durationSec,
-        scriptText: shot.scriptText,
-        assetIds: assets.filter((asset) => shot.requiredAssets.some((slot) => slot.slotId === asset.slotId)).map((asset) => asset.assetId),
-      })),
+      shots: content.shots.map((shot) => {
+        const shotAssets = assets.filter((asset) => shot.requiredAssets.some((slot) => slot.slotId === asset.slotId));
+        const analyzed = shotAssets.find((asset) => asset.analysis?.recommendedClip);
+        const clip = analyzed?.analysis?.recommendedClip;
+        const startSec = Number(clip?.startSec) || 0;
+        const analyzedDuration = Math.max(0, (Number(clip?.endSec) || 0) - startSec);
+        return {
+          shotId: shot.shotId,
+          startSec,
+          durationSec: analyzedDuration || shot.durationSec,
+          scriptText: analyzed?.analysis?.asr?.transcript || shot.scriptText,
+          subtitles: analyzed?.analysis?.asr?.sentences || [],
+          visualAnalysis: analyzed?.analysis?.vision || null,
+          assetIds: shotAssets.map((asset) => asset.assetId),
+        };
+      }),
       editInstructions: content.editInstructions || [],
     },
     editor: '待接入视频剪辑模型或 Skill',

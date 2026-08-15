@@ -62,12 +62,15 @@ function initialState() {
     apiError: '',
     currentUser: null,
     busy: '',
+    workspaceLoading: false,
+    advisorProfileLoading: false,
     materialOperations: {},
     currentAdvisorId: 'ADV-017',
     currentTaskId: 'TASK-001',
     onboarding: {
       advisors: [],
       selectedAdvisorId: '',
+      resumableSession: null,
       session: null,
       question: null,
       questions: [],
@@ -84,6 +87,8 @@ let state = initialState();
 let toastTimer;
 let materialRequestSequence = 0;
 let materialAppliedSequence = 0;
+let workspaceRequestSequence = 0;
+let advisorProfileRequestSequence = 0;
 const app = document.querySelector('#app');
 const pageTitle = document.querySelector('#page-title');
 const breadcrumb = document.querySelector('#breadcrumb');
@@ -91,6 +96,9 @@ const drawer = document.querySelector('#guide-drawer');
 const drawerMask = document.querySelector('#drawer-mask');
 const toast = document.querySelector('#toast');
 const runtimeStatus = document.querySelector('#runtime-status');
+const advisorMiniAvatar = document.querySelector('#advisor-mini-avatar');
+const advisorMiniName = document.querySelector('#advisor-mini-name');
+const advisorMiniDetail = document.querySelector('#advisor-mini-detail');
 const materialFileInput = document.createElement('input');
 materialFileInput.type = 'file';
 materialFileInput.className = 'material-file-picker';
@@ -101,6 +109,21 @@ let selectedMaterialSlotId = '';
 const fmt = (value) => new Intl.NumberFormat('zh-CN').format(value);
 const compact = (value) => value >= 10000 ? `${(value / 10000).toFixed(1)}万` : fmt(value);
 const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+
+function renderProfileEvidence(values = [], visibleLimit = 5) {
+  const labelsById = new Map((state.profile.tags || []).map((tag) => [String(tag.id || tag.tagId || ''), tag.label || tag.term]));
+  const labels = [...new Set(values.map((value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const mapped = labelsById.get(raw);
+    if (mapped) return mapped;
+    return /^(TERM|TAG)-/i.test(raw) ? '' : raw;
+  }).filter(Boolean))];
+  if (!labels.length) return '<div class="chips"><span>画像证据待同步</span></div>';
+  const visible = labels.slice(0, visibleLimit);
+  const hidden = labels.slice(visibleLimit);
+  return `<div class="profile-evidence"><div class="chips">${visible.map((label) => `<span>${escapeHtml(label)}</span>`).join('')}</div>${hidden.length ? `<details class="chip-overflow"><summary>还有 ${hidden.length} 项</summary><div class="chips chip-overflow-list">${hidden.map((label) => `<span>${escapeHtml(label)}</span>`).join('')}</div></details>` : ''}</div>`;
+}
 
 function readMediaMetadata(file) {
   if (!/^(video|audio|image)\//.test(file.type)) return Promise.resolve({ durationSec: 0, width: 0, height: 0 });
@@ -255,10 +278,12 @@ function renderQuizProfile() {
   const onboarding = state.onboarding;
   const session = onboarding.session;
   const selectedAdvisor = onboarding.advisors.find((item) => item.advisorId === onboarding.selectedAdvisorId);
-  const storedSessionId = localStorage.getItem(ONBOARDING_STORAGE_KEY);
+  const isExistingProfile = selectedAdvisor?.initializationStatus === 'active';
+  const resumableSession = onboarding.resumableSession;
+  const canResumeSelectedAdvisor = Boolean(selectedAdvisor && resumableSession?.advisorId === selectedAdvisor.advisorId && !['confirmed', 'abandoned'].includes(resumableSession.status));
   const advisorOptions = onboarding.advisors.map((advisor) => `
     <button class="advisor-option ${onboarding.selectedAdvisorId === advisor.advisorId ? 'selected' : ''}" data-action="select-advisor" data-advisor-id="${escapeHtml(advisor.advisorId)}">
-      <strong>${escapeHtml(advisor.displayName || advisor.advisorId)}</strong><span>${escapeHtml(advisor.city || '城市待补充')} · ${advisor.initializationStatus === 'active' ? '已有画像' : '待初始化'}</span>
+      <strong>${escapeHtml(advisor.displayName || advisor.advisorId)}</strong><span>${escapeHtml(advisor.city || '城市待补充')} · ${advisor.initializationStatus === 'active' ? '已有画像' : resumableSession?.advisorId === advisor.advisorId ? '有未完成问卷' : '待初始化'}</span>
     </button>`).join('');
   const question = onboarding.reviewQuestionId
     ? onboarding.questions.find((item) => item.id === onboarding.reviewQuestionId)
@@ -282,17 +307,19 @@ function renderQuizProfile() {
 
   return `
     ${simulationNote('问卷答案与画像词均为顾问主动提供或由其答案计算；模型不可用时自动使用本地规则。')}
-    ${header('STEP 01 · KNOW ME', '用一题一屏认识顾问', '基础问卷＋自适应追问＋情景判断＋短文表达题，3—5 分钟形成可解释的词云画像。', state.calibrated ? '<button class="secondary" data-page="topics">进入机会雷达 →</button>' : '')}
+    ${header('STEP 01 · KNOW ME', isExistingProfile ? '已有顾问画像' : '用一题一屏认识顾问', isExistingProfile ? '该顾问已经完成画像初始化，系统直接读取飞书中的生效画像，不再重复进入基础问卷。' : '基础问卷＋自适应追问＋情景判断＋短文表达题，3—5 分钟形成可解释的词云画像。', state.calibrated ? '<button class="secondary" data-page="topics">进入机会雷达 →</button>' : '')}
     <section class="card quiz-shell">
-      <div class="quiz-stage-bar"><span class="${!session ? 'active' : 'done'}">1 选择身份</span><span class="${session?.status === 'quiz_active' ? 'active' : session ? 'done' : ''}">2 基础问卷</span><span class="${session?.adaptiveQuestionIds?.length ? 'active' : ''}">3 自适应追问</span><span class="${onboarding.candidates.length ? 'active' : ''}">4 词云画像</span></div>
+      <div class="quiz-stage-bar"><span class="${isExistingProfile || session ? 'done' : 'active'}">1 选择身份</span><span class="${isExistingProfile ? 'done' : session?.status === 'quiz_active' ? 'active' : session ? 'done' : ''}">2 基础问卷</span><span class="${isExistingProfile ? 'done' : session?.adaptiveQuestionIds?.length ? 'active' : ''}">3 自适应追问</span><span class="${isExistingProfile || onboarding.candidates.length ? 'active' : ''}">4 词云画像</span></div>
+      ${session ? `<div class="quiz-session-toolbar"><button class="secondary" data-action="back-advisor-selection">← 返回选择顾问</button><span>当前答题进度已保存，稍后可以继续恢复。</span></div>` : ''}
       ${!session ? `
         <div class="quiz-identity">
           <div class="identity-copy"><span class="eyebrow">ADVISOR IDENTITY</span><h3>先选择顾问身份</h3><p>已有顾问无需重复填资料；新顾问只填写姓名、城市、门店。</p></div>
           <div class="advisor-options">${advisorOptions || '<span class="empty-copy">正在读取顾问列表…</span>'}</div>
-          ${selectedAdvisor ? `<div class="selected-advisor-card"><div><strong>${escapeHtml(selectedAdvisor.displayName)}</strong><span>${escapeHtml(selectedAdvisor.city)} · ${escapeHtml(selectedAdvisor.store || '门店待补充')}</span></div><button class="primary" data-action="create-quiz-session" data-advisor-id="${escapeHtml(selectedAdvisor.advisorId)}">使用这个顾问开始</button></div>` : `
-          <form class="identity-mini-form" id="quiz-identity-form"><label>姓名<input name="displayName" value="顾问小林" required></label><label>城市<input name="city" value="成都" required></label><label>门店<input name="store" value="成都模拟门店" required></label><button class="primary" type="button" data-action="create-quiz-session">创建新顾问并开始</button></form>`}
-          ${storedSessionId ? `<div class="resume-card"><div><strong>发现未完成问卷</strong><span>${escapeHtml(storedSessionId)}</span></div><button class="secondary" data-action="resume-quiz">恢复答题</button></div>` : ''}
+          ${selectedAdvisor ? `<div class="selected-advisor-card"><div><strong>${escapeHtml(selectedAdvisor.displayName)}</strong><span>${escapeHtml(selectedAdvisor.city)} · ${escapeHtml(selectedAdvisor.store || '门店待补充')} · ${isExistingProfile ? '画像已生效' : canResumeSelectedAdvisor ? '存在未完成问卷' : '待初始化'}</span></div>${isExistingProfile ? `<button class="primary" data-page="topics" ${state.advisorProfileLoading || !state.calibrated ? 'disabled' : ''}>${state.advisorProfileLoading ? '正在读取画像…' : '进入机会雷达'} →</button>` : canResumeSelectedAdvisor ? `<button class="primary" data-action="resume-quiz">恢复答题 →</button>` : `<button class="primary" data-action="create-quiz-session" data-advisor-id="${escapeHtml(selectedAdvisor.advisorId)}" ${state.busy === 'quiz-create' ? 'disabled' : ''}>${state.busy === 'quiz-create' ? '正在创建问卷…' : '使用这个顾问开始'}</button>`}</div>` : `
+          <form class="identity-mini-form" id="quiz-identity-form"><label>姓名<input name="displayName" value="顾问小林" required></label><label>城市<input name="city" value="成都" required></label><label>门店<input name="store" value="成都模拟门店" required></label><button class="primary" type="button" data-action="create-quiz-session" ${state.busy === 'quiz-create' ? 'disabled' : ''}>${state.busy === 'quiz-create' ? '正在创建问卷…' : '创建新顾问并开始'}</button></form>`}
+          ${canResumeSelectedAdvisor ? `<div class="resume-card"><div><strong>该顾问有未完成画像</strong><span>${escapeHtml(resumableSession.sessionId)} · 进度保存在飞书中</span><small>“删除”只会将记录标记为已放弃并从页面隐藏，不会物理删除 Base 记录。</small></div><button class="danger-button" data-action="abandon-quiz-session">删除未完成画像</button></div>` : ''}
         </div>` : ''}
+      ${state.advisorProfileLoading ? `<section class="profile-loading" aria-live="polite"><span class="workspace-spinner" aria-hidden="true"></span><strong>正在读取飞书画像标签</strong><p>读取完成后会直接展示已有画像，不会创建新问卷。</p></section>` : ''}
       ${session?.status === 'quiz_active' ? `
         <section class="quiz-card">
           <div class="quiz-progress"><div><span>${question?.adaptive ? '自适应追问' : question?.type === 'text' ? '表达测试' : '基础问卷'}</span><strong>${Math.min(currentIndex + 1, totalQuestions)} / ${totalQuestions}</strong></div><i><b style="width:${Math.round(answeredCount / totalQuestions * 100)}%"></b></i></div>
@@ -300,9 +327,9 @@ function renderQuizProfile() {
         </section>` : ''}
       ${onboarding.candidates.length ? `
         <section class="word-cloud-section">
-          <div class="word-cloud-head"><div><span class="eyebrow">PROFILE WORD CLOUD</span><h2>词云画像</h2><p>字号代表权重，颜色代表维度，透明度代表置信度；点击画像词查看来源和证据。</p></div><span class="word-count">${onboarding.candidates.length}<small>画像词</small></span></div>
+          <div class="word-cloud-head"><div><span class="eyebrow">PROFILE WORD CLOUD</span><h2>${isExistingProfile ? '当前生效画像' : '词云画像'}</h2><p>字号代表权重，颜色代表维度，透明度代表置信度；点击画像词查看来源和证据。</p></div><span class="word-count">${onboarding.candidates.length}<small>画像词</small></span></div>
           <div class="word-cloud-layout"><div class="profile-word-cloud">${cloud}</div>${selectedWord ? `<aside class="word-detail"><span>${escapeHtml(selectedWord.dimension)}</span><h3>${escapeHtml(selectedWord.term || selectedWord.label)}</h3><div class="word-scores"><b>权重 ${selectedWord.weight}</b><b>置信度 ${selectedWord.confidence}</b></div><h4>来源</h4><p>${sources.map(escapeHtml).join(' · ')}</p><h4>证据</h4>${evidence.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}<div class="word-actions"><button data-action="lower-cloud-word" data-index="${onboarding.selectedWordIndex}">降低权重</button><button data-action="lock-cloud-word" data-index="${onboarding.selectedWordIndex}">${selectedWord.locked ? '已锁定' : '锁定词语'}</button><button data-action="remove-cloud-word" data-index="${onboarding.selectedWordIndex}">删除词语</button></div></aside>` : ''}</div>
-          <div class="confirm-bar"><span>确认后形成画像 V1，并根据高权重词创建第一条内容任务。</span><button class="primary" data-action="confirm-word-cloud">确认词云画像 V1</button></div>
+          ${isExistingProfile ? `<div class="confirm-bar"><span>画像已从飞书读取，本次选择不会重复写入或创建问卷。</span><button class="primary" data-page="topics">使用当前画像进入机会雷达 →</button></div>` : `<div class="confirm-bar"><span>确认后形成画像 V1，并根据高权重词创建第一条内容任务。</span><button class="primary" data-action="confirm-word-cloud" ${state.busy === 'quiz-confirm' ? 'disabled' : ''}>${state.busy === 'quiz-confirm' ? '正在确认并创建任务…' : '确认词云画像 V1'}</button></div>`}
         </section>` : ''}
       ${onboarding.error ? `<p class="onboarding-error">${escapeHtml(onboarding.error)}</p>` : ''}
     </section>`;
@@ -322,19 +349,26 @@ function renderTopics() {
     <div class="layout topic-layout">
       <section class="card demand-card"><span class="eyebrow">ROUTING EVIDENCE</span><h3>本次推荐读取了什么</h3><div class="route-source-list"><p><b>${summary.profileSignals}</b><span>画像标签：决定顾问擅长什么、如何表达</span></p><p><b>${summary.demandSignals}</b><span>评论与线索：决定用户现在关心什么</span></p><p><b>${summary.matrixCorpus}</b><span>历史成果：优先补位没有被充分覆盖的角度</span></p></div><blockquote>${state.opportunityGeneratedAt ? `最近计算：${new Date(state.opportunityGeneratedAt).toLocaleString('zh-CN')}` : '点击“读取实际任务池”后，由服务端返回可追溯推荐。'}</blockquote><small>拒绝任务时必须填写拒绝原因，原因会形成待确认学习事件。</small></section>
       <section class="topics-panel">
-        ${state.topics.length ? state.topics.map((topic, index) => `<article class="topic-card ${state.selectedTopic?.id === topic.id ? 'selected' : ''}"><div class="topic-top"><span>推荐 ${index + 1} · ${escapeHtml(topic.status || '候选')}</span><b>${topic.score} 路由分</b></div><h3>${escapeHtml(topic.title)}</h3><p>${escapeHtml(topic.need)}</p><div class="chips">${topic.matched.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('') || '<span>画像证据待增强</span>'}</div><div class="score-breakdown"><span>画像 ${topic.scoreBreakdown.profile}</span><span>需求 ${topic.scoreBreakdown.demand}</span><span>矩阵 ${topic.scoreBreakdown.matrix}</span></div><div class="reason"><strong>为什么推荐</strong><p>${escapeHtml(topic.why)}</p><small>矩阵空白：${escapeHtml(topic.matrixGap || '由历史内容自动计算')}</small>${topic.demandEvidence.length ? `<p>需求证据：${escapeHtml(topic.demandEvidence[0])}</p>` : ''}</div><div class="topic-actions"><button class="primary" data-action="accept-opportunity" data-task-id="${escapeHtml(topic.taskId)}">${state.selectedTopic?.taskId === topic.taskId ? '✓ 已接受' : '接受任务'}</button><button data-action="reject-opportunity" data-task-id="${escapeHtml(topic.taskId)}">拒绝</button></div></article>`).join('') : `<section class="card empty-state"><span>✦</span><h3>当前没有可推荐任务</h3><p>任务池没有当前顾问可处理的候选记录。请先在 ContentTasks 中添加任务，或由画像初始化创建首条任务。</p><button class="primary" data-action="route-opportunities">重新读取实际任务池</button></section>`}
+        ${state.topics.length ? state.topics.map((topic, index) => `<article class="topic-card ${state.selectedTopic?.id === topic.id ? 'selected' : ''}"><div class="topic-top"><span>推荐 ${index + 1} · ${escapeHtml(topic.status || '候选')}</span><b>${topic.score} 路由分</b></div><h3>${escapeHtml(topic.title)}</h3><p>${escapeHtml(topic.need)}</p>${renderProfileEvidence(topic.matched)}<div class="score-breakdown"><span>画像 ${topic.scoreBreakdown.profile}</span><span>需求 ${topic.scoreBreakdown.demand}</span><span>矩阵 ${topic.scoreBreakdown.matrix}</span></div><div class="reason"><strong>为什么推荐</strong><p>${escapeHtml(topic.why)}</p><small>矩阵空白：${escapeHtml(topic.matrixGap || '由历史内容自动计算')}</small>${topic.demandEvidence.length ? `<p>需求证据：${escapeHtml(topic.demandEvidence[0])}</p>` : ''}</div><div class="topic-actions"><button class="primary" data-action="accept-opportunity" data-task-id="${escapeHtml(topic.taskId)}">${state.selectedTopic?.taskId === topic.taskId ? '✓ 已接受' : '接受任务'}</button><button data-action="reject-opportunity" data-task-id="${escapeHtml(topic.taskId)}">拒绝</button></div></article>`).join('') : `<section class="card empty-state"><span>✦</span><h3>当前没有可推荐任务</h3><p>任务池没有当前顾问可处理的候选记录。请先在 ContentTasks 中添加任务，或由画像初始化创建首条任务。</p><button class="primary" data-action="route-opportunities">重新读取实际任务池</button></section>`}
       </section>
     </div>
     ${state.selectedTopic ? `<div class="sticky-next"><div><span>已接受并写回</span><strong>${escapeHtml(state.selectedTopic.title)}</strong></div><button class="primary" data-page="studio">进入内容创作室 →</button></div>` : ''}`;
 }
 
 function renderStudio() {
+  if (state.workspaceLoading) return `
+    ${header('STEP 03 · CREATE', '正在读取当前顾问的已接收任务', '正在连接飞书 Base，并按当前顾问 ID 读取已接收任务。读取完成前不会展示其他顾问或本地兜底数据。')}
+    <section class="card workspace-loading" aria-live="polite">
+      <span class="workspace-spinner" aria-hidden="true"></span>
+      <h2>正在同步当前顾问的工作台</h2>
+      <p>通常需要 1—3 秒，请稍候。</p>
+    </section>`;
   if (state.busy === 'content' || state.busy === 'content-read') return `
-    ${header('STEP 03 · CREATE', state.busy === 'content-read' ? '正在读取上次内容' : '正在生成可拍摄内容包', state.busy === 'content-read' ? '正在按任务与内容成果的真实关联读取飞书记录。' : '模型生成、代码质检和飞书写回通常需要 1—2 分钟。')}
-    <section class="card empty-state"><span>✦</span><h2>正在读取内容包</h2><p>系统会先按任务 ID 读取飞书中的已有成果并直接展示；只有尚未生成内容时，才会继续调用模型、质检并写回飞书。</p><div class="chips"><span>读取已有成果</span><span>必要时模型生成</span><span>四重质检</span><span>写回飞书</span></div></section>`;
+    ${header('STEP 03 · CREATE', state.busy === 'content-read' ? '正在读取内容' : '正在生成可拍摄内容包', state.busy === 'content-read' ? '正在按任务与内容成果的真实关联读取飞书记录。' : '模型生成、代码质检和飞书写回通常需要 1—2 分钟。')}
+    <section class="card empty-state"><span>✦</span><h2>${state.busy === 'content-read' ? '正在读取内容包' : '正在调用内容模型'}</h2><p>${state.busy === 'content-read' ? '正在按任务 ID 读取飞书中已保存的完整内容。' : '模型在限定时间内无响应时，系统会明确使用本地确定性方案继续质检和写回，不会一直停在这里。'}</p><div class="chips"><span>读取任务上下文</span><span>生成内容</span><span>四重质检</span><span>写回飞书</span></div></section>`;
   if (!state.studioSelectedTaskId) return `
-    ${header('STEP 03 · CREATE', '已经接收的任务', '这里直接读取飞书中的接受结果。选择一项后，系统只打开该任务上一次保存的内容成果。')}
-    <section class="topics-panel">${state.acceptedTasks.length ? state.acceptedTasks.map((task, index) => `<article class="topic-card"><div class="topic-top"><span>已接收 ${index + 1} · ${escapeHtml(task.status || '待生成')}</span><b>${Number(task.score || task.routeScore) || 0} 路由分</b></div><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.need)}</p><div class="chips">${task.matched.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('') || '<span>画像证据待增强</span>'}</div><div class="score-breakdown"><span>画像 ${task.scoreBreakdown?.profile || 0}</span><span>需求 ${task.scoreBreakdown?.demand || 0}</span><span>矩阵 ${task.scoreBreakdown?.matrix || 0}</span></div><div class="reason"><strong>为什么推荐</strong><p>${escapeHtml(task.why || '任务已由顾问接收并写回飞书。')}</p><small>${task.hasContent ? `已有内容：${escapeHtml(task.contentId)}` : '当前尚无内容成果'}</small></div><div class="topic-actions"><button class="primary" data-action="open-accepted-task" data-task-id="${escapeHtml(task.taskId)}">${task.hasContent ? '读取上次内容' : '查看任务'}</button></div></article>`).join('') : `<section class="card empty-state"><span>▤</span><h2>还没有已接收任务</h2><p>请先到机会雷达选择并接收任务。</p><button class="primary" data-page="topics">前往机会雷达</button></section>`}</section>`;
+    ${header('STEP 03 · CREATE', '已经接收的任务', '这里直接读取飞书中的接受结果。选择一项后，系统只读取当前仍然存在且拍摄要求完整的内容成果。')}
+    <section class="topics-panel">${state.acceptedTasks.length ? state.acceptedTasks.map((task, index) => `<article class="topic-card"><div class="topic-top"><span>已接收 ${index + 1} · ${escapeHtml(task.status || '待生成')}</span><b>${Number(task.score || task.routeScore) || 0} 路由分</b></div><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.need)}</p>${renderProfileEvidence(task.matched)}<div class="score-breakdown"><span>画像 ${task.scoreBreakdown?.profile || 0}</span><span>需求 ${task.scoreBreakdown?.demand || 0}</span><span>矩阵 ${task.scoreBreakdown?.matrix || 0}</span></div><div class="reason"><strong>为什么推荐</strong><p>${escapeHtml(task.why || '任务已由顾问接收并写回飞书。')}</p><small>${task.hasContent ? `已有内容：${escapeHtml(task.contentId)}` : '当前尚无内容成果，点击后直接生成'}</small></div><div class="topic-actions"><button class="primary" data-action="open-accepted-task" data-task-id="${escapeHtml(task.taskId)}">${task.hasContent ? '读取内容' : '生成内容'}</button></div></article>`).join('') : `<section class="card empty-state"><span>▤</span><h2>还没有已接收任务</h2><p>请先到机会雷达选择并接收任务。</p><button class="primary" data-page="topics">前往机会雷达</button></section>`}</section>`;
   const studioTask = state.acceptedTasks.find((task) => task.taskId === state.studioSelectedTaskId);
   if (!state.content && studioTask) return `
     ${header('STEP 03 · CREATE', '任务尚无内容成果', '该任务已经接收，但飞书“内容成果”表中还没有对应记录。系统没有自动调用模型。', '<button class="secondary" data-action="back-accepted-tasks">返回已接收任务</button>')}
@@ -350,16 +384,16 @@ function renderStudio() {
     </div>
     <section class="card storyboard"><div class="card-head"><div><span class="eyebrow">STORYBOARD</span><h3>分镜＋字幕＋剪辑时间轴</h3></div><span class="pill">竖屏 9:16 · 约 65 秒</span></div><div class="shot-grid">${c.storyboard.map((shot, index) => `<article><b>0${index + 1}</b><span>${shot.time}</span><strong>${shot.shot}</strong><p>字幕：${shot.subtitle}</p></article>`).join('')}</div><div class="timeline">${c.editTimeline.map((item) => `<span>${item}</span>`).join('')}</div></section>
     <div class="layout two-one">
-      <section class="card material-card"><div class="card-head"><div><span class="eyebrow">MATERIALS</span><h3>顾问只需补充这些真实素材</h3></div><span class="pill">${state.materialComparison ? `${state.materialComparison.matchedCount}/${state.materialComparison.requiredCount} 已通过` : '上传后后台检查'}</span></div>${c.materials.map((item, index) => {
+      <section class="card material-card"><div class="card-head"><div><span class="eyebrow">MATERIALS</span><h3>顾问只需补充这些真实素材</h3></div><div><button class="secondary home-test-button" data-action="home-editing-test">生成居家剪辑测试</button><span class="pill">${state.materialComparison ? `${state.materialComparison.matchedCount}/${state.materialComparison.requiredCount} 已通过` : '上传后后台检查'}</span></div></div>${c.materials.map((item, index) => {
         const operation = state.materialOperations[item.slotId] || (item.checkState === 'checking' ? 'checking' : '');
         const operationLabel = operation === 'uploading' ? '上传中…' : operation === 'checking' ? '后台检查中…' : item.fileName ? '替换素材' : '上传素材';
         const icon = item.checkState === 'passed' ? '✓' : item.checkState === 'failed' ? '!' : item.checkState === 'checking' ? '…' : index + 1;
-        return `<div class="material-row material-upload-row ${item.checkState}"><i>${icon}</i><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.guide)}</span><small>${escapeHtml(item.status)}</small></div><button class="material-upload-button ${operation ? 'busy' : ''}" data-action="select-material" data-slot-id="${escapeHtml(item.slotId)}" data-accept="${item.accept}" ${operation ? 'disabled' : ''}>${operationLabel}</button></div>`;
-      }).join('')}</section>
+        return `<div class="material-row material-upload-row ${item.checkState}"><i>${icon}</i><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.guide)}</span>${item.scriptText ? `<span class="material-script"><b>口播：</b>${escapeHtml(item.scriptText)}</span>` : ''}<small>${escapeHtml(item.status)}</small></div><button class="material-upload-button ${operation ? 'busy' : ''}" data-action="select-material" data-slot-id="${escapeHtml(item.slotId)}" data-accept="${item.accept}" ${operation ? 'disabled' : ''}>${operationLabel}</button></div>`;
+      }).join('')}<div class="material-video-action"><div><strong>${state.materialsConfirmed ? '必填素材已全部通过检查' : '上传并通过全部必填素材后即可生成视频'}</strong><span>${state.materialsConfirmed ? '系统将使用当前 JSON3 和剪辑任务生成预览视频。' : `当前已通过 ${state.materialComparison?.matchedCount || 0}/${state.materialComparison?.requiredCount || c.materials.length} 项必填素材。`}</span></div><button class="primary" data-action="start-editing" ${!state.materialsConfirmed || !state.editingJob?.editingJobId || state.busy === 'editing' || state.editingJob?.status === '剪辑中' ? 'disabled' : ''}>${!state.materialsConfirmed ? '请先补齐素材' : !state.editingJob?.editingJobId ? '正在创建剪辑任务…' : ['待顾问预览','已完成'].includes(state.editingJob.status) ? '重新生成预览视频' : state.editingJob.status === '失败' ? '重试生成预览视频' : state.editingJob.status === '剪辑中' ? '正在生成预览…' : '生成预览视频'} →</button></div></section>
       <aside class="card cover-card"><span>封面建议</span><strong>${c.cover}</strong><small>大字不超过 10 个字，保留真实车辆或门店画面</small><h4>评论预案</h4>${c.replyPlan.map((item) => `<p>• ${item}</p>`).join('')}</aside>
     </div>
     ${state.editingJob ? `<section class="card editing-card"><div class="card-head"><div><span class="eyebrow">LOCAL FFMPEG</span><h3>视频剪辑任务</h3></div><span class="pill">${escapeHtml(state.editingJob.status)} · ${Number(state.editingJob.progress) || 0}%</span></div><div class="editing-progress"><i style="width:${Math.max(0, Math.min(100, Number(state.editingJob.progress) || 0))}%"></i></div>${state.editingJob.failureReason ? `<p class="editing-error">${escapeHtml(state.editingJob.failureReason)}</p>` : ''}${['待顾问预览','已完成'].includes(state.editingJob.status) ? `<video class="editing-preview" controls preload="metadata" src="/api/editing/jobs/${encodeURIComponent(state.editingJob.editingJobId)}/preview?v=${encodeURIComponent(state.editingJob.completedAt || state.editingJob.previewFileToken || '1')}"></video>` : ''}</section>` : ''}
-    <div class="sticky-next"><div><span>${state.materialsConfirmed ? '素材已齐全' : '素材准备状态'}</span><strong>${state.editingJob ? `剪辑任务：${escapeHtml(state.editingJob.status)}` : state.materialsConfirmed ? '已形成 JSON3，可以生成预览视频' : '按镜头上传，每上传一个都会自动检查'}</strong></div>${state.materialsConfirmed && state.editingJob ? `<button class="primary" data-action="start-editing" ${state.busy === 'editing' || state.editingJob.status === '剪辑中' ? 'disabled' : ''}>${['待顾问预览','已完成'].includes(state.editingJob.status) ? '重新生成预览' : state.editingJob.status === '失败' ? '重试剪辑' : '生成预览视频'} →</button>` : `<button class="primary" data-page="quality">查看内容质检 →</button>`}</div>`;
+    <div class="sticky-next"><div><span>${state.materialsConfirmed ? '素材已齐全' : '素材准备状态'}</span><strong>${state.editingJob ? `剪辑任务：${escapeHtml(state.editingJob.status)}` : state.materialsConfirmed ? '已形成 JSON3，可在素材板块生成预览视频' : '按镜头上传，每上传一个都会自动检查'}</strong></div><button class="primary" data-page="quality">查看内容质检 →</button></div>`;
 }
 
 function scoreCard(label, value, detail) {
@@ -428,6 +462,15 @@ function updateRuntimeBadge() {
   runtimeStatus.className = `sim-pill runtime-${state.apiError ? 'error' : copy.tone}`;
 }
 
+function updateAdvisorBadge() {
+  const advisor = state.onboarding.advisors.find((item) => item.advisorId === state.currentAdvisorId);
+  const name = advisor?.displayName || state.currentUser?.name || state.currentAdvisorId || '未选择顾问';
+  const city = advisor?.city || '城市待补充';
+  advisorMiniAvatar.textContent = name.replace(/顾问|\s/g, '').slice(-2) || '--';
+  advisorMiniName.textContent = name;
+  advisorMiniDetail.textContent = `${city} · 当前顾问`;
+}
+
 function apiQualityToLegacy(quality) {
   return {
     fact: quality.fact.score,
@@ -477,6 +520,7 @@ function apiContentToLegacy(content, requirements = [], assets = []) {
         slotId: requirement.slotId,
         label: requirement.description || requirement.visualDescription,
         guide: requirement.shootingGuide,
+        scriptText: requirement.scriptText || '',
         status: asset?.status === 'checking' ? '素材已上传，正在后台自动检查' : asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
         fileName: asset?.fileName || '',
         checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : asset?.status === 'checking' ? 'checking' : 'waiting',
@@ -518,6 +562,7 @@ function applyMaterialResult(data) {
       slotId: requirement.slotId,
       label: requirement.description || requirement.visualDescription,
       guide: requirement.shootingGuide,
+      scriptText: requirement.scriptText || '',
       status: asset?.status === 'checking' ? '素材已上传，正在后台自动检查' : asset?.invalidReason || (asset?.status === 'available' ? '检查通过' : `待上传 · ${requirement.type === 'video' ? `至少 ${requirement.minDurationSec} 秒` : requirement.type}`),
       fileName: asset?.fileName || '',
       checkState: asset?.status === 'available' ? 'passed' : asset?.status === 'invalid' ? 'failed' : asset?.status === 'checking' ? 'checking' : 'waiting',
@@ -576,7 +621,8 @@ async function pollMaterialCheck(contentId, slotId, attempts = 90, delayMs = 1_0
       applyMaterialResult(payload.data);
       render();
     }
-    if (asset && ['available', 'invalid'].includes(asset.status)) return { payload, asset };
+    const waitingForEditingJob = asset?.status === 'available' && payload.data.comparison?.complete && !payload.data.editingJob?.editingJobId;
+    if (asset && ['available', 'invalid'].includes(asset.status) && !waitingForEditingJob) return { payload, asset };
     if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   const error = new Error('后台检查仍在进行，请稍后刷新内容创作室查看结果');
@@ -681,18 +727,113 @@ function applyWorkspacePayload(data) {
   state.editingJob = null;
 }
 
-async function resumeAdvisorWorkspace({ notify = false } = {}) {
-  if (!state.currentAdvisorId) return;
+function clearAdvisorWorkspace() {
+  state.topics = [];
+  state.selectedTopic = null;
+  state.acceptedTasks = [];
+  state.studioSelectedTaskId = '';
+  state.currentTaskId = '';
+  state.content = null;
+  state.materialComparison = null;
+  state.materialsConfirmed = false;
+  state.editingJob = null;
+  state.materialOperations = {};
+  state.matrixResolved = false;
+  state.matrix = null;
+  state.quality = null;
+  state.apiError = '';
+}
+
+function clearAdvisorQuizState(advisorId, force = false) {
+  const sessionAdvisorId = state.onboarding.session?.advisorId;
+  if (!force && sessionAdvisorId === advisorId) return;
+  state.onboarding.session = null;
+  state.onboarding.question = null;
+  state.onboarding.questions = [];
+  state.onboarding.candidates = [];
+  state.onboarding.result = null;
+  state.onboarding.reviewQuestionId = null;
+  state.onboarding.selectedWordIndex = 0;
+  state.onboarding.error = '';
+}
+
+function applyExistingAdvisorProfile(data) {
+  const advisor = data.advisor;
+  const profileTags = clone(data.profileTags || []);
+  state.profile = {
+    maturity: Number(advisor.profileMaturity) || 0,
+    stage: `画像 V${Number(advisor.profileVersion) || 1} · 已生效`,
+    updatedAt: profileTags.map((tag) => tag.updatedAt).filter(Boolean).sort().at(-1) || '飞书实时读取',
+    tags: profileTags.map((tag) => ({
+      id: tag.tagId,
+      dimension: tag.dimension,
+      label: tag.label,
+      weight: Number(tag.weight) || 0,
+      confidence: Number(tag.confidence) || 0,
+      source: tag.source || '飞书画像标签',
+      evidence: Array.isArray(tag.evidence) ? tag.evidence.join('；') : tag.evidence || '',
+      status: ['锁定', 'locked'].includes(tag.status) ? 'locked' : 'active',
+    })),
+    events: [],
+  };
+  state.onboarding.candidates = profileTags.map((tag) => ({
+    ...tag,
+    term: tag.label,
+    evidence: Array.isArray(tag.evidence) ? tag.evidence : [tag.evidence].filter(Boolean),
+    sources: tag.sourceRefs?.length ? tag.sourceRefs : [tag.source].filter(Boolean),
+    locked: ['锁定', 'locked'].includes(tag.status),
+  }));
+  state.onboarding.selectedWordIndex = 0;
+  state.calibrated = advisor.initializationStatus === 'active';
+}
+
+async function loadExistingAdvisorProfile(advisor, { notify = true } = {}) {
+  const advisorId = advisor.advisorId;
+  const requestSequence = ++advisorProfileRequestSequence;
+  state.advisorProfileLoading = true;
+  if (state.page === 'profile') render();
   try {
-    const payload = await oneKosApi.getAdvisorWorkspace(state.currentAdvisorId);
+    const payload = await oneKosApi.getAdvisorProfile(advisorId);
+    if (requestSequence !== advisorProfileRequestSequence || state.currentAdvisorId !== advisorId) return;
+    state.runtime = payload.runtime;
+    applyExistingAdvisorProfile(payload.data);
+    state.onboarding.error = '';
+    if (notify) showToast(`已读取 ${state.onboarding.candidates.length} 个生效画像词`);
+  } catch (error) {
+    if (requestSequence !== advisorProfileRequestSequence || state.currentAdvisorId !== advisorId) return;
+    state.calibrated = false;
+    state.onboarding.error = `已有画像读取失败：${error.message}`;
+    if (notify) showToast(state.onboarding.error, 'warning');
+  } finally {
+    if (requestSequence === advisorProfileRequestSequence && state.currentAdvisorId === advisorId) {
+      state.advisorProfileLoading = false;
+      if (state.page === 'profile') render();
+    }
+  }
+}
+
+async function resumeAdvisorWorkspace({ notify = false } = {}) {
+  const advisorId = state.currentAdvisorId;
+  if (!advisorId) return;
+  const requestSequence = ++workspaceRequestSequence;
+  state.workspaceLoading = true;
+  if (state.page === 'studio') render();
+  try {
+    const payload = await oneKosApi.getAdvisorWorkspace(advisorId);
+    if (requestSequence !== workspaceRequestSequence || state.currentAdvisorId !== advisorId) return;
     state.runtime = payload.runtime;
     applyWorkspacePayload(payload.data);
     state.apiError = '';
-    if (state.page === 'studio' || state.page === 'topics') render();
     if (notify && state.acceptedTasks.length) showToast(`已读取 ${state.acceptedTasks.length} 个已接收任务`);
   } catch (error) {
+    if (requestSequence !== workspaceRequestSequence || state.currentAdvisorId !== advisorId) return;
     state.apiError = error.message;
     if (notify) showToast(`工作台恢复失败：${error.message}`, 'warning');
+  } finally {
+    if (requestSequence === workspaceRequestSequence && state.currentAdvisorId === advisorId) {
+      state.workspaceLoading = false;
+      if (state.page === 'studio' || state.page === 'topics') render();
+    }
   }
 }
 
@@ -707,7 +848,7 @@ async function restoreFeishuIdentity() {
     await loadAdvisors();
     const advisor = state.onboarding.advisors.find((item) => item.advisorId === user.advisorId);
     if (advisor?.initializationStatus !== 'active') navigate('profile');
-    else render();
+    else await loadExistingAdvisorProfile(advisor, { notify: false });
   } catch {
     // 本地演示与未配置飞书登录时保持现有模拟身份。
   }
@@ -739,6 +880,7 @@ function applyQuizPayload(data) {
   state.onboarding.reviewQuestionId = null;
   state.onboarding.selectedWordIndex = 0;
   state.onboarding.error = '';
+  state.onboarding.resumableSession = data.session || state.onboarding.resumableSession;
   if (data.session?.advisorId) state.currentAdvisorId = data.session.advisorId;
 }
 
@@ -752,6 +894,22 @@ async function resumeQuizSession(sessionId = localStorage.getItem(ONBOARDING_STO
     localStorage.removeItem(ONBOARDING_STORAGE_KEY);
     state.onboarding.error = `无法恢复问卷：${error.message}`;
     if (state.page === 'profile') render();
+  }
+}
+
+async function loadResumableQuizSession(sessionId = localStorage.getItem(ONBOARDING_STORAGE_KEY)) {
+  state.onboarding.resumableSession = null;
+  if (!sessionId) return;
+  try {
+    const payload = await oneKosApi.getQuizSession(sessionId);
+    const session = payload.data.session;
+    if (['confirmed', 'abandoned'].includes(session.status)) {
+      localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+      return;
+    }
+    state.onboarding.resumableSession = session;
+  } catch {
+    localStorage.removeItem(ONBOARDING_STORAGE_KEY);
   }
 }
 
@@ -872,6 +1030,7 @@ function render() {
   app.innerHTML = views[state.page]();
   renderGuide();
   updateRuntimeBadge();
+  updateAdvisorBadge();
 }
 
 function navigate(page) {
@@ -882,9 +1041,47 @@ function navigate(page) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+async function generateStudioContent() {
+  if (state.busy === 'content' || !state.currentTaskId) return;
+  const contentId = contentIdForTask(state.currentTaskId);
+  state.busy = 'content';
+  state.apiError = '';
+  navigate('studio');
+  showToast('正在生成当前任务的内容包…');
+  try {
+    const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId });
+    state.runtime = payload.runtime;
+    applyContentPackage(payload.data);
+    state.apiError = '';
+    const fallback = payload.data.generator === 'local-deterministic-fallback';
+    showToast(fallback
+      ? `外部模型未响应，已使用本地确定性方案${payload.data.write.action === 'created' ? '新建' : '更新'}并写回飞书`
+      : `内容包已生成并${payload.data.write.action === 'created' ? '新建' : '更新'}写回，生成器：${payload.data.generator}`,
+    fallback ? 'warning' : 'success');
+  } catch (error) {
+    showToast('生成请求中断，正在按内容 ID 检查飞书是否已经写回…', 'warning');
+    try {
+      const recovered = await recoverContentPackage(contentId);
+      state.runtime = recovered.runtime;
+      applyContentPackage(recovered.data);
+      state.apiError = '';
+      showToast('已从飞书恢复生成结果，可以继续上传素材');
+    } catch (recoveryError) {
+      state.apiError = `${error.message}；恢复失败：${recoveryError.message}`;
+      state.content = null;
+      showToast(`内容生成失败：${state.apiError}`, 'warning');
+    }
+  } finally {
+    state.busy = '';
+    render();
+    updateRuntimeBadge();
+  }
+}
+
 document.addEventListener('click', async (event) => {
   const pageTarget = event.target.closest('[data-page]');
   if (pageTarget) {
+    if (pageTarget.dataset.page === 'studio') state.workspaceLoading = true;
     navigate(pageTarget.dataset.page);
     if (pageTarget.dataset.page === 'topics') await loadOpportunities();
     if (pageTarget.dataset.page === 'studio') await resumeAdvisorWorkspace();
@@ -915,13 +1112,31 @@ document.addEventListener('click', async (event) => {
   } else if (action === 'select-advisor') {
     const advisor = state.onboarding.advisors.find((item) => item.advisorId === target.dataset.advisorId);
     if (!advisor) return;
+    workspaceRequestSequence += 1;
+    advisorProfileRequestSequence += 1;
     state.onboarding.selectedAdvisorId = advisor.advisorId;
     state.currentAdvisorId = advisor.advisorId;
-    state.topics = [];
-    state.selectedTopic = null;
+    state.workspaceLoading = false;
+    state.advisorProfileLoading = false;
+    clearAdvisorWorkspace();
+    clearAdvisorQuizState(advisor.advisorId, advisor.initializationStatus === 'active');
+    state.calibrated = false;
+    state.profile = clone(initialProfile);
     render();
-    showToast(`已选择顾问：${advisor.displayName || advisor.advisorId}`);
+    if (advisor.initializationStatus === 'active') {
+      await loadExistingAdvisorProfile(advisor);
+    } else {
+      showToast(`已选择顾问：${advisor.displayName || advisor.advisorId}，请开始或恢复画像问卷`);
+    }
+  } else if (action === 'back-advisor-selection') {
+    clearAdvisorQuizState('', true);
+    state.onboarding.selectedAdvisorId = '';
+    state.calibrated = false;
+    state.profile = clone(initialProfile);
+    render();
+    showToast('已返回顾问选择，当前问卷进度仍保存在飞书中');
   } else if (action === 'create-quiz-session') {
+    if (state.busy === 'quiz-create') return;
     const advisor = state.onboarding.advisors.find((item) => item.advisorId === target.dataset.advisorId);
     let input;
     if (advisor) {
@@ -932,6 +1147,8 @@ document.addEventListener('click', async (event) => {
       const data = new FormData(form);
       input = { advisorId: `ADV-QUIZ-${String(Date.now()).slice(-8)}`, displayName: data.get('displayName'), city: data.get('city'), store: data.get('store'), identitySource: 'demo' };
     }
+    state.busy = 'quiz-create';
+    render();
     try {
       const payload = await oneKosApi.createQuizSession(input);
       applyQuizPayload(payload.data);
@@ -941,10 +1158,33 @@ document.addEventListener('click', async (event) => {
     } catch (error) {
       state.onboarding.error = error.message;
       render();
+    } finally {
+      state.busy = '';
+      render();
     }
   } else if (action === 'resume-quiz') {
-    await resumeQuizSession();
+    const resumable = state.onboarding.resumableSession;
+    if (!resumable || resumable.advisorId !== state.onboarding.selectedAdvisorId) {
+      showToast('请先选择这份未完成问卷对应的顾问', 'warning');
+      return;
+    }
+    await resumeQuizSession(resumable.sessionId);
     showToast(state.onboarding.session ? '已恢复到上次答题位置' : '没有可恢复的问卷', state.onboarding.session ? '' : 'warning');
+  } else if (action === 'abandon-quiz-session') {
+    const resumable = state.onboarding.resumableSession;
+    if (!resumable || resumable.advisorId !== state.onboarding.selectedAdvisorId) return;
+    try {
+      await oneKosApi.abandonQuizSession(resumable.sessionId);
+      if (localStorage.getItem(ONBOARDING_STORAGE_KEY) === resumable.sessionId) localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+      clearAdvisorQuizState('', true);
+      state.onboarding.resumableSession = null;
+      await loadAdvisors();
+      render();
+      showToast('未完成画像已标记为已放弃并从页面隐藏');
+    } catch (error) {
+      state.onboarding.error = `删除未完成画像失败：${error.message}`;
+      render();
+    }
   } else if (action === 'previous-quiz-question') {
     const session = state.onboarding.session;
     const answered = session.questionIds.filter((questionId) => questionId in session.answers);
@@ -968,6 +1208,9 @@ document.addEventListener('click', async (event) => {
       showToast(payload.data.session.currentQuestionId ? '答案已保存' : '所有题目已完成，可以生成词云');
     } catch (error) {
       state.onboarding.error = error.message;
+      render();
+    } finally {
+      state.busy = '';
       render();
     }
   } else if (action === 'complete-quiz') {
@@ -996,11 +1239,14 @@ document.addEventListener('click', async (event) => {
     if (word) word.locked = !word.locked;
     render();
   } else if (action === 'confirm-word-cloud') {
+    if (state.busy === 'quiz-confirm') return;
     const acceptedTags = state.onboarding.candidates.map((word) => ({ tagId: word.tagId, label: word.term || word.label, weight: word.weight, locked: Boolean(word.locked) }));
     if (!acceptedTags.length) {
       showToast('至少保留一个画像词', 'warning');
       return;
     }
+    state.busy = 'quiz-confirm';
+    render();
     try {
       const sessionId = state.onboarding.session.sessionId;
       const payload = await oneKosApi.confirmQuizSession(sessionId, acceptedTags, `WEB-${sessionId}`);
@@ -1011,6 +1257,7 @@ document.addEventListener('click', async (event) => {
       state.currentAdvisorId = payload.data.advisor.advisorId;
       state.currentTaskId = payload.data.task.taskId;
       localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+      state.onboarding.resumableSession = null;
       navigate('topics');
       await loadOpportunities({ recalculate: true });
       showToast('词云画像 V1 已确认，正在进入机会雷达');
@@ -1018,6 +1265,9 @@ document.addEventListener('click', async (event) => {
       state.onboarding.error = error.message;
       render();
       showToast(`画像确认失败：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+      render();
     }
   } else if (action === 'resume-onboarding') {
     await resumeOnboardingSession();
@@ -1095,6 +1345,7 @@ document.addEventListener('click', async (event) => {
       state.currentAdvisorId = payload.data.advisor.advisorId;
       state.currentTaskId = payload.data.task.taskId;
       localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+      state.onboarding.resumableSession = null;
       render();
       showToast('画像 V1 已生效，首条内容任务已创建');
     } catch (error) {
@@ -1157,7 +1408,7 @@ document.addEventListener('click', async (event) => {
     state.materialsConfirmed = false;
     state.editingJob = null;
     if (!task.contentId) {
-      render();
+      await generateStudioContent();
       return;
     }
     state.busy = 'content-read';
@@ -1167,10 +1418,10 @@ document.addEventListener('click', async (event) => {
       state.runtime = payload.runtime;
       applyContentPackage(payload.data);
       state.apiError = '';
-      showToast('已读取该任务上一次保存的内容和素材进度');
+      showToast('已读取该任务当前保存的内容和素材进度');
     } catch (error) {
       state.apiError = error.message;
-      showToast(`上次内容读取失败：${error.message}`, 'warning');
+      showToast(`内容读取失败：${error.message}`, 'warning');
     } finally {
       state.busy = '';
       render();
@@ -1184,52 +1435,28 @@ document.addEventListener('click', async (event) => {
     state.editingJob = null;
     render();
   } else if (action === 'generate-content') {
-    const contentId = contentIdForTask(state.currentTaskId);
-    state.busy = 'content';
-    state.apiError = '';
-    navigate('studio');
-    showToast('正在读取该任务已有的内容包…');
-    try {
-      try {
-        const existing = await oneKosApi.getContentPackage(contentId);
-        state.runtime = existing.runtime;
-        applyContentPackage(existing.data);
-        state.apiError = '';
-        showToast('已从飞书读取内容包，可以继续上传素材');
-        return;
-      } catch (readError) {
-        if (readError.status !== 404) throw readError;
-      }
-      showToast('当前任务尚无内容成果，正在调用创作 Agent 生成…');
-      const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId });
-      state.runtime = payload.runtime;
-      applyContentPackage(payload.data);
-      state.apiError = '';
-      showToast(`内容包已生成并${payload.data.write.action === 'created' ? '新建' : '更新'}写回，生成器：${payload.data.generator}`);
-    } catch (error) {
-      showToast('连接中断，正在按内容 ID 从飞书恢复已写回结果…', 'warning');
-      try {
-        const recovered = await recoverContentPackage(contentId);
-        state.runtime = recovered.runtime;
-        applyContentPackage(recovered.data);
-        state.apiError = '';
-        showToast('已从飞书恢复内容包，可以继续上传素材');
-      } catch (recoveryError) {
-        state.apiError = `${error.message}；恢复失败：${recoveryError.message}`;
-        state.content = null;
-        showToast(`内容生成或恢复失败：${state.apiError}`, 'warning');
-      }
-    } finally {
-      state.busy = '';
-      render();
-      updateRuntimeBadge();
-    }
+    await generateStudioContent();
   } else if (action === 'copy-content') {
     try {
       await navigator.clipboard.writeText(`${state.content.title}\n\n${state.content.hook}\n\n${state.content.body}\n\n${state.content.cta}`);
       showToast('内容包已复制');
     } catch {
       showToast('浏览器未授予剪贴板权限', 'warning');
+    }
+  } else if (action === 'home-editing-test') {
+    const contentId = `CONTENT-HOME-TEST-${state.currentTaskId}-${Date.now().toString(36).toUpperCase()}`;
+    state.busy = 'content';
+    render();
+    try {
+      const payload = await oneKosApi.generateContent({ advisorId: state.currentAdvisorId, taskId: state.currentTaskId, contentId, testMode: 'home-editing' });
+      state.runtime = payload.runtime;
+      applyContentPackage(payload.data);
+      showToast('已生成两段居家拍摄要求；上传后仍走正式的 ASR、视觉解析和 FFmpeg 剪辑链路');
+    } catch (error) {
+      showToast(`居家剪辑测试创建失败：${error.message}`, 'warning');
+    } finally {
+      state.busy = '';
+      render();
     }
   } else if (action === 'start-editing') {
     if (state.busy === 'editing') return;
@@ -1329,8 +1556,8 @@ document.addEventListener('change', async (event) => {
   selectedMaterialSlotId = '';
   materialFileInput.value = '';
   if (!file || !slotId || !state.content) return;
-  if (file.size > 20 * 1024 * 1024) {
-    showToast('单个素材暂时不能超过 20MB', 'warning');
+  if (file.size > 100 * 1024 * 1024) {
+    showToast('单个素材暂时不能超过 100MB', 'warning');
     return;
   }
 
@@ -1369,7 +1596,7 @@ document.addEventListener('change', async (event) => {
 
 async function bootstrap() {
   render();
-  await Promise.all([loadAdvisors(), resumeQuizSession()]);
+  await Promise.all([loadAdvisors(), loadResumableQuizSession()]);
   await restoreFeishuIdentity();
   await resumeAdvisorWorkspace();
   await refreshBackendState();

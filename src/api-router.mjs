@@ -4,13 +4,14 @@ import { Readable } from 'node:stream';
 import { FeishuBitableClient } from './feishu-client.mjs';
 import { FeishuOAuthClient, FeishuSessionStore } from './feishu-auth.mjs';
 import { OpenAICompatibleClient } from './llm-client.mjs';
+import { DashScopeAsrClient, MediaAnalysisClient, QwenVisionClient } from './media-analysis-client.mjs';
 import { FeishuOneKosRepository, SimulationOneKosRepository } from './onekos-repository.mjs';
 import { OneKosService } from './onekos-service.mjs';
 import { createRuntimeConfig, toPublicRuntimeStatus } from './runtime-config.mjs';
 import { LocalFfmpegVideoEditor } from './video-editor.mjs';
 
 const MAX_JSON_BYTES = 1024 * 1024;
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export function createOneKosRuntime({ env = process.env, fetchImpl = globalThis.fetch } = {}) {
   const config = createRuntimeConfig(env);
@@ -23,6 +24,24 @@ export function createOneKosRuntime({ env = process.env, fetchImpl = globalThis.
   const llmClient = config.llm.configured
     ? new OpenAICompatibleClient({ ...config.llm, fetchImpl })
     : null;
+  const mediaAnalysisClient = config.mediaAnalysis.configured
+    ? new MediaAnalysisClient({
+        asrClient: new DashScopeAsrClient({
+          baseUrl: config.mediaAnalysis.dashscopeBaseUrl,
+          apiKey: config.mediaAnalysis.apiKey,
+          model: config.mediaAnalysis.asrModel,
+          fetchImpl,
+          timeoutMs: config.mediaAnalysis.timeoutMs,
+        }),
+        visionClient: new QwenVisionClient({
+          baseUrl: config.mediaAnalysis.compatibleBaseUrl,
+          apiKey: config.mediaAnalysis.apiKey,
+          model: config.mediaAnalysis.visionModel,
+          fetchImpl,
+          timeoutMs: config.mediaAnalysis.timeoutMs,
+        }),
+      })
+    : null;
   const authClient = config.feishu.loginConfigured ? new FeishuOAuthClient({
     appId: config.feishu.appId, appSecret: config.feishu.appSecret, redirectUri: config.feishu.oauthRedirectUri,
     apiBaseUrl: config.feishu.apiBaseUrl, fetchImpl,
@@ -33,6 +52,8 @@ export function createOneKosRuntime({ env = process.env, fetchImpl = globalThis.
     service: new OneKosService({
       repository,
       llmClient,
+      mediaAnalysisClient,
+      mediaAnalysisConfig: config.mediaAnalysis,
       mode: config.mode,
       videoEditor: new LocalFfmpegVideoEditor(config.video),
     }),
@@ -92,7 +113,7 @@ async function readAssetUpload(request) {
   }
   const contentLength = Number(request.headers['content-length']) || 0;
   if (contentLength > MAX_UPLOAD_BYTES + 128 * 1024) {
-    const error = new Error('单个素材不能超过 20MB');
+    const error = new Error('单个素材不能超过 100MB');
     error.statusCode = 413;
     throw error;
   }
@@ -110,7 +131,7 @@ async function readAssetUpload(request) {
     throw error;
   }
   if (!file.size || file.size > MAX_UPLOAD_BYTES) {
-    const error = new Error(file.size ? '单个素材不能超过 20MB' : '不能上传空文件');
+    const error = new Error(file.size ? '单个素材不能超过 100MB' : '不能上传空文件');
     error.statusCode = file.size ? 413 : 400;
     throw error;
   }
@@ -182,6 +203,12 @@ export function createApiHandler({ service, runtimeStatus, authClient = null, au
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }
+      const advisorProfileMatch = request.method === 'GET' && url.pathname.match(/^\/api\/advisors\/([^/]+)\/profile$/);
+      if (advisorProfileMatch) {
+        const data = await service.getAdvisorProfile(decodeURIComponent(advisorProfileMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
       const advisorWorkspaceMatch = request.method === 'GET' && url.pathname.match(/^\/api\/advisors\/([^/]+)\/workspace$/);
       if (advisorWorkspaceMatch) {
         const data = await service.getAdvisorWorkspace(decodeURIComponent(advisorWorkspaceMatch[1]));
@@ -203,6 +230,13 @@ export function createApiHandler({ service, runtimeStatus, authClient = null, au
       if (quizCompleteMatch) {
         await readJsonBody(request);
         const data = await service.completeQuizSession(decodeURIComponent(quizCompleteMatch[1]));
+        sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
+        return true;
+      }
+      const quizAbandonMatch = request.method === 'POST' && url.pathname.match(/^\/api\/onboarding\/quiz-sessions\/([^/]+)\/abandon$/);
+      if (quizAbandonMatch) {
+        await readJsonBody(request);
+        const data = await service.abandonQuizSession(decodeURIComponent(quizAbandonMatch[1]));
         sendJson(response, 200, { ok: true, data, runtime: runtimeStatus }, requestId);
         return true;
       }

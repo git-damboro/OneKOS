@@ -40,7 +40,36 @@ test('机会路由使用当前画像、线索和历史内容重新评分而不�
   assert.equal(result.recommendations[0].scoreBreakdown.demand > 0, true);
   assert.equal(result.recommendations[1].scoreBreakdown.matrix < result.recommendations[0].scoreBreakdown.matrix, true);
   assert.match(result.recommendations[0].why, /画像|需求|矩阵/);
-  assert.deepEqual(result.summary, { profileSignals: 3, taskPool: 2, demandSignals: 1, matrixCorpus: 1 });
+  assert.deepEqual(result.summary, { profileSignals: 3, taskPool: 2, duplicateTasks: 0, demandSignals: 1, matrixCorpus: 1 });
+});
+
+test('同一任务 ID 即使在飞书中有重复记录也只展示一次', () => {
+  const duplicate = { ...tasks[0] };
+  const result = routeOpportunities({ advisorId: 'ADV-001', tasks: [tasks[0], duplicate], profileTags, limit: 3 });
+
+  assert.equal(result.recommendations.length, 1);
+  assert.equal(result.recommendations[0].taskId, 'TASK-L60');
+  assert.equal(result.summary.taskPool, 1);
+  assert.equal(result.summary.duplicateTasks, 1);
+});
+
+test('推荐理由只概括主要画像词，避免把完整画像铺满卡片', () => {
+  const manyTags = Array.from({ length: 8 }, (_, index) => ({
+    tagId: `TAG-${index + 1}`,
+    label: `画像词${index + 1}`,
+    weight: 80,
+    confidence: 80,
+    status: '生效',
+  }));
+  const result = routeOpportunities({
+    advisorId: 'ADV-001',
+    tasks: [{ ...tasks[0], profileEvidence: manyTags.map((tag) => tag.tagId) }],
+    profileTags: manyTags,
+  });
+
+  assert.match(result.recommendations[0].why, /画像词1、画像词2、画像词3、画像词4、画像词5/);
+  assert.match(result.recommendations[0].why, /等 8 项画像/);
+  assert.doesNotMatch(result.recommendations[0].why, /画像词6/);
 });
 
 test('接受机会进入待生成，拒绝机会必须记录原因和学习事件', () => {

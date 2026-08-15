@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildEditingJob,
   buildShootingRequirements,
   compareRequirementsAndAssets,
   inspectUploadedAsset,
@@ -84,4 +85,22 @@ test('素材比较由确定性规则识别缺失、时长和方向问题', () =>
   assert.equal(invalid.complete, false);
   assert.equal(invalid.invalid.length, 1);
   assert.equal(invalid.invalid[0].reasons.length, 2);
+});
+
+test('剪辑任务优先使用素材解析得到的截取区间和真实字幕', () => {
+  const content = { contentId: 'CONTENT-AI', aspectRatio: '9:16', estimatedDurationSec: 10, editInstructions: [], shots: [{ shotId: 'SHOT-1', durationSec: 8, scriptText: '策划台词', requiredAssets: [{ slotId: 'SLOT-1' }] }] };
+  const assets = [{ assetId: 'ASSET-1', slotId: 'SLOT-1', analysis: { recommendedClip: { startSec: 2, endSec: 7 }, asr: { transcript: '真实口播', sentences: [{ startSec: 2.2, endSec: 4, text: '真实口播' }] }, vision: { summary: '真实画面' } } }];
+  const job = buildEditingJob({ content, assets, comparison: { matched: [{ assetId: 'ASSET-1' }] }, timestamp: '2026-08-15T00:00:00.000Z' });
+  assert.equal(job.editingPlan.shots[0].startSec, 2);
+  assert.equal(job.editingPlan.shots[0].durationSec, 5);
+  assert.equal(job.editingPlan.shots[0].scriptText, '真实口播');
+  assert.equal(job.editingPlan.shots[0].subtitles[0].startSec, 2.2);
+});
+
+test('模型即使输出过多视频槽位也只保留最多五段必填', () => {
+  const content = normalizeProductionCandidate({
+    shots: Array.from({ length: 7 }, (_, index) => ({ visualDescription: `镜头${index + 1}`, requiredAssets: [{ type: 'video', required: true }] })),
+  }, { task, contentId: 'CONTENT-BURDEN' });
+  const requiredVideos = content.shots.flatMap((shot) => shot.requiredAssets).filter((asset) => asset.type === 'video' && asset.required);
+  assert.equal(requiredVideos.length, 5);
 });
