@@ -41,6 +41,7 @@ export function createRuntimeConfig(env = process.env) {
 
   if (!feishuConfigured) warnings.push(hasFeishuCredentials ? '飞书问卷会话表未配置，使用仓库内模拟数据' : '飞书未配置，使用仓库内模拟数据');
   if (!llmConfigured) warnings.push('外部模型未配置，使用本地确定性生成器');
+  if (!env.AILY_API_KEY) warnings.push('Aily API 鉴权未配置；正式环境应设置 AILY_API_KEY');
 
   return {
     mode: feishuConfigured && llmConfigured ? 'live' : feishuConfigured ? 'hybrid' : 'simulation',
@@ -85,6 +86,11 @@ export function createRuntimeConfig(env = process.env) {
       fontDir: env.VIDEO_FONT_DIR || undefined,
       fontName: env.VIDEO_FONT_NAME || undefined,
     },
+    aily: {
+      apiKey: env.AILY_API_KEY || '',
+      attachmentHostSuffixes: String(env.AILY_ATTACHMENT_HOSTS || '')
+        .split(',').map((item) => item.trim().toLowerCase()).filter(Boolean),
+    },
     warnings,
   };
 }
@@ -111,6 +117,11 @@ export function toPublicRuntimeStatus(config) {
     video: {
       editor: 'local-ffmpeg',
       output: `${config.video.width}x${config.video.height}`,
+    },
+    aily: {
+      configured: true,
+      authConfigured: Boolean(config.aily.apiKey),
+      persistence: 'feishu-onboarding-session-table',
     },
   };
 }

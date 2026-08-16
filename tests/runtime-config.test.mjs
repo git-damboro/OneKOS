@@ -40,16 +40,22 @@ test('飞书真实画像链路要求显式配置问卷会话表', () => {
 test('未配置外部服务时判定为 simulation', () => {
   const config = createRuntimeConfig({});
   assert.equal(config.mode, 'simulation');
-  assert.deepEqual(config.warnings, ['飞书未配置，使用仓库内模拟数据', '外部模型未配置，使用本地确定性生成器']);
+  assert.deepEqual(config.warnings, [
+    '飞书未配置，使用仓库内模拟数据',
+    '外部模型未配置，使用本地确定性生成器',
+    'Aily API 鉴权未配置；正式环境应设置 AILY_API_KEY',
+  ]);
 });
 
 test('公开状态不会泄露密钥', () => {
-  const config = createRuntimeConfig({ ...feishuEnv, ...llmEnv });
+  const config = createRuntimeConfig({ ...feishuEnv, ...llmEnv, AILY_API_KEY: 'aily-secret' });
   const status = toPublicRuntimeStatus(config);
   const serialized = JSON.stringify(status);
   assert.equal(serialized.includes('feishu-secret'), false);
   assert.equal(serialized.includes('llm-secret'), false);
+  assert.equal(serialized.includes('aily-secret'), false);
   assert.equal(status.feishu.appTokenHint, 'base…oken');
+  assert.equal(status.aily.authConfigured, true);
 });
 
 test('视频剪辑路径可由环境变量迁移且公开状态不暴露本机路径', () => {

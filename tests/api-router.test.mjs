@@ -4,10 +4,14 @@ import test from 'node:test';
 import { createAppServer } from '../server.mjs';
 
 async function withServer(service, run) {
-  const server = createAppServer({
+  return withRuntime({
     service,
     runtimeStatus: { mode: 'simulation', simulation: true, warnings: ['测试模式'], feishu: { configured: false }, llm: { configured: false } },
-  });
+  }, run);
+}
+
+async function withRuntime(options, run) {
+  const server = createAppServer(options);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     await run(`http://127.0.0.1:${server.address().port}`);
@@ -286,4 +290,36 @@ test('机会雷达 API 支持读取、重新路由和接受拒绝决策', async 
     ['route', { advisorId: 'ADV-017', limit: 3 }],
     ['decision', 'TASK/002', { advisorId: 'ADV-017', decision: 'reject', reason: '缺少素材' }],
   ]);
+});
+
+test('Aily 编排 API 校验 Bearer Token 并返回统一对话动作', async () => {
+  const calls = [];
+  const aily = {
+    capabilities() { return { version: '1.0' }; },
+    async selectAdvisor(body) {
+      calls.push(body);
+      return { ok: true, reply: '已选择顾问', state: { advisorId: body.advisorId }, nextAction: 'list_tasks' };
+    },
+  };
+  await withRuntime({
+    service: {}, aily, ailyApiKey: 'aily-test-key',
+    runtimeStatus: { mode: 'simulation', simulation: true, warnings: [] },
+  }, async (baseUrl) => {
+    const unauthorized = await jsonPost(`${baseUrl}/api/aily/session/select-advisor`, { conversationKey: 'c1', advisorId: 'ADV-017' });
+    assert.equal(unauthorized.status, 401);
+
+    const capabilities = await fetch(`${baseUrl}/api/aily/capabilities`, { headers: { authorization: 'Bearer aily-test-key' } });
+    assert.equal((await capabilities.json()).data.version, '1.0');
+
+    const selected = await fetch(`${baseUrl}/api/aily/session/select-advisor`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer aily-test-key' },
+      body: JSON.stringify({ conversationKey: 'c1', advisorId: 'ADV-017' }),
+    });
+    const payload = await selected.json();
+    assert.equal(selected.status, 200);
+    assert.equal(payload.nextAction, 'list_tasks');
+    assert.equal(payload.state.advisorId, 'ADV-017');
+  });
+  assert.deepEqual(calls, [{ conversationKey: 'c1', advisorId: 'ADV-017' }]);
 });

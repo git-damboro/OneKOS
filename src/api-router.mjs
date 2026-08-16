@@ -9,6 +9,7 @@ import { FeishuOneKosRepository, SimulationOneKosRepository } from './onekos-rep
 import { OneKosService } from './onekos-service.mjs';
 import { createRuntimeConfig, toPublicRuntimeStatus } from './runtime-config.mjs';
 import { LocalFfmpegVideoEditor } from './video-editor.mjs';
+import { AilyOrchestrator } from './aily-orchestrator.mjs';
 
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -46,17 +47,27 @@ export function createOneKosRuntime({ env = process.env, fetchImpl = globalThis.
     appId: config.feishu.appId, appSecret: config.feishu.appSecret, redirectUri: config.feishu.oauthRedirectUri,
     apiBaseUrl: config.feishu.apiBaseUrl, fetchImpl,
   }) : null;
+  const service = new OneKosService({
+    repository,
+    llmClient,
+    mediaAnalysisClient,
+    mediaAnalysisConfig: config.mediaAnalysis,
+    mode: config.mode,
+    videoEditor: new LocalFfmpegVideoEditor(config.video),
+  });
+  const aily = new AilyOrchestrator({
+    service,
+    repository,
+    fetchImpl,
+    mode: config.mode,
+    ...(config.aily.attachmentHostSuffixes.length ? { attachmentHostSuffixes: config.aily.attachmentHostSuffixes } : {}),
+  });
   return {
     config,
     runtimeStatus: toPublicRuntimeStatus(config),
-    service: new OneKosService({
-      repository,
-      llmClient,
-      mediaAnalysisClient,
-      mediaAnalysisConfig: config.mediaAnalysis,
-      mode: config.mode,
-      videoEditor: new LocalFfmpegVideoEditor(config.video),
-    }),
+    service,
+    aily,
+    ailyApiKey: config.aily.apiKey,
     authClient,
     authSessions: new FeishuSessionStore(),
   };
@@ -146,7 +157,7 @@ async function readAssetUpload(request) {
   };
 }
 
-export function createApiHandler({ service, runtimeStatus, authClient = null, authSessions = null }) {
+export function createApiHandler({ service, runtimeStatus, aily = null, ailyApiKey = '', authClient = null, authSessions = null }) {
   return async function handleApiRequest(request, response) {
     const url = new URL(request.url || '/', 'http://127.0.0.1');
     if (request.method === 'GET' && url.pathname === '/auth/feishu/login') {
@@ -178,6 +189,49 @@ export function createApiHandler({ service, runtimeStatus, authClient = null, au
       }
       if (request.method === 'GET' && url.pathname === '/api/health') {
         sendJson(response, 200, { ok: true, runtime: runtimeStatus, timestamp: new Date().toISOString() }, requestId);
+        return true;
+      }
+      if (url.pathname.startsWith('/api/aily/')) {
+        if (!aily) {
+          const error = new Error('Aily 编排服务未启用');
+          error.statusCode = 503;
+          throw error;
+        }
+        if (ailyApiKey) {
+          const authorization = String(request.headers.authorization || '');
+          if (authorization !== `Bearer ${ailyApiKey}`) {
+            const error = new Error('Aily API 鉴权失败');
+            error.statusCode = 401;
+            throw error;
+          }
+        }
+        if (request.method === 'GET' && url.pathname === '/api/aily/capabilities') {
+          sendJson(response, 200, { ok: true, data: aily.capabilities(), runtime: runtimeStatus }, requestId);
+          return true;
+        }
+        const body = await readJsonBody(request);
+        const handlers = new Map([
+          ['/api/aily/session/select-advisor', (value) => aily.selectAdvisor(value)],
+          ['/api/aily/onboarding/start', (value) => aily.startOnboarding(value)],
+          ['/api/aily/onboarding/answer', (value) => aily.answerOnboarding(value)],
+          ['/api/aily/onboarding/confirm', (value) => aily.confirmOnboarding(value)],
+          ['/api/aily/tasks/list', (value) => aily.listTasks(value)],
+          ['/api/aily/tasks/decide', (value) => aily.decideTask(value)],
+          ['/api/aily/content/generate', (value) => aily.startContentGeneration(value)],
+          ['/api/aily/content/status', (value) => aily.getContentStatus(value)],
+          ['/api/aily/materials/import', (value) => aily.importAttachment(value)],
+          ['/api/aily/production/status', (value) => aily.getProductionStatus(value)],
+          ['/api/aily/editing/start', (value) => aily.startEditing(value)],
+        ]);
+        const handler = request.method === 'POST' ? handlers.get(url.pathname) : null;
+        if (!handler) {
+          const error = new Error('Aily API 路由不存在');
+          error.statusCode = 404;
+          throw error;
+        }
+        const data = await handler(body);
+        const accepted = ['/api/aily/content/generate', '/api/aily/materials/import', '/api/aily/editing/start'].includes(url.pathname);
+        sendJson(response, accepted ? 202 : 200, { ...data, runtime: runtimeStatus }, requestId);
         return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/auth/me') {
